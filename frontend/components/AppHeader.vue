@@ -65,50 +65,33 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useNuxtApp } from 'nuxt/app'
 import { useChatStore } from '~/stores/chat'
 import { useThemeStore } from '~/stores/theme'
+import { useAuthStore } from '~/stores/auth'
 
-const { $emitter, $websocket } = useNuxtApp()
+const { $websocket } = useNuxtApp()
 const router = useRouter()
 const chatStore = useChatStore()
 const themeStore = useThemeStore()
-const token = ref(null)
-const role = ref('')
+const authStore = useAuthStore()
 
-const isLoggedIn = computed(() => !!token.value)
+// Reactive state from authStore
+const isLoggedIn = computed(() => authStore.isLoggedIn)
+const role = computed(() => authStore.role || '')
 
 onMounted(() => {
-  if (process.client) {
-    token.value = localStorage.getItem('token')
-    role.value = localStorage.getItem('role') || ''
-    if (isLoggedIn.value) {
-      chatStore.fetchDialogs()
-    }
-    $emitter.on('login', () => {
-      token.value = localStorage.getItem('token')
-      role.value = localStorage.getItem('role') || ''
-      chatStore.fetchDialogs()
-    })
-    $emitter.on('logout', () => {
-      token.value = null
-      role.value = ''
-    })
+  authStore.initialize() // Ensure store is initialized with localStorage data
+  if (isLoggedIn.value) {
+    chatStore.fetchDialogs()
   }
 })
 
 const logout = () => {
-  if (process.client) {
-    localStorage.removeItem('token')
-    localStorage.removeItem('role')
-    localStorage.removeItem('userId')
-    $websocket.disconnect()
-    $emitter.emit('logout')
-  }
-  token.value = null
-  role.value = ''
+  authStore.clearUser() // Use store to clear auth data
+  $websocket.disconnect()
   router.push('/login')
 }
 </script>

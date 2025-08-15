@@ -54,11 +54,12 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useRuntimeConfig } from 'nuxt/app'
 import { useNuxtApp } from 'nuxt/app'
+import { useAuthStore } from '~/stores/auth'
 
 const { $emitter } = useNuxtApp()
-const emitter = $emitter
 const config = useRuntimeConfig()
 const router = useRouter()
+const authStore = useAuthStore()
 const valid = ref(false)
 const loading = ref(false)
 const errorMessage = ref('')
@@ -78,12 +79,8 @@ const login = async () => {
     errorMessage.value = error.value.data?.error || 'Неверные данные'
     return
   }
-  if (process.client) {
-    localStorage.setItem('token', data.value.token)
-    localStorage.setItem('role', data.value.role)
-    localStorage.setItem('userId', data.value.id)
-    emitter.emit('login')
-  }
-  router.push('/profile')  // Мгновенный redirect в профиль для показа данных
+  authStore.setUser(data.value.token, data.value.role, data.value.id)
+  $emitter.emit('login') // Keep for compatibility with other components
+  router.push('/profile')
 }
 </script>

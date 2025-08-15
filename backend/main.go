@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
 	"github.com/shopspring/decimal"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
@@ -124,6 +125,12 @@ type Dialog struct {
 }
 
 func main() {
+	// Загружаем .env файл
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("Warning: Could not load .env file, using system environment variables")
+	}
+
 	if os.Getenv("JWT_SECRET") == "" {
 		panic("JWT_SECRET not set")
 	}
@@ -131,10 +138,10 @@ func main() {
 	if dsn == "" {
 		dsn = "host=localhost user=postgres password=adminadmiadmadanim dbname=education_for sslmode=disable"
 	}
-	var err error
-	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		panic("Не удалось подключиться к базе данных: " + err.Error())
+	var errDb error
+	db, errDb = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if errDb != nil {
+		panic("Не удалось подключиться к базе данных: " + errDb.Error())
 	}
 	db.AutoMigrate(&User{}, &Course{}, &Payment{}, &Message{}, &Notification{}, &Review{})
 	// Test data

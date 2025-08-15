@@ -116,24 +116,23 @@
               v-model="expiry" 
               :rules="[v => !!v || 'Поле обязательно']" 
               style="margin-bottom: 16px;" 
-              aria-label="Срок действия" 
+              aria-label="Срок действия карты" 
             />
             <v-text-field 
               label="CVV" 
               v-model="cvv" 
-              type="password" 
               :rules="[v => !!v || 'Поле обязательно']" 
               style="margin-bottom: 16px;" 
-              aria-label="CVV" 
+              aria-label="CVV код" 
             />
           </v-form>
         </v-card-text>
-        <v-card-actions style="justify-content: space-between; gap: 8px;">
+        <v-card-actions style="justify-content: flex-end; gap: 8px;">
           <v-btn 
             color="primary" 
             @click="submitPayment" 
-            v-tooltip="'Подтвердить оплату'" 
-            aria-label="Подтвердить оплату"
+            v-tooltip="'Оплатить'" 
+            aria-label="Оплатить"
           >
             Оплатить
           </v-btn>
@@ -285,16 +284,26 @@ const openChat = async () => {
     router.push('/login')
     return
   }
+  if (!courseStore.course?.teacher_id) {
+    snackbarText.value = 'Ошибка: ID автора курса не найден'
+    snackbarColor.value = 'error'
+    snackbar.value = true
+    return
+  }
   try {
     const headers = { Authorization: `Bearer ${token.value}` }
-    const { data } = await $fetch(`${config.public.apiBase}/api/start-chat`, {
+    const data = await $fetch(`${config.public.apiBase}/api/start-chat`, {
       method: 'POST',
       headers,
       body: { receiver_id: courseStore.course.teacher_id }
     })
+    console.log('API Response:', data) // Временное логирование для отладки
+    if (!data?.receiver_id) {
+      throw new Error('Ответ сервера не содержит receiver_id')
+    }
     router.push(`/chats?selected=${data.receiver_id}`)
   } catch (error) {
-    snackbarText.value = 'Ошибка открытия чата: ' + (error.message || 'Неизвестная ошибка')
+    snackbarText.value = 'Ошибка открытия чата: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
     snackbarColor.value = 'error'
     snackbar.value = true
   }
