@@ -1,0 +1,121 @@
+@import 'https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap';
+
+.v-application {
+  background-color: #F0FDFA !important;
+  font-family: 'Roboto', sans-serif;
+}
+
+.v-application.theme--dark {
+  background-color: #1C352D !important;
+}
+
+.logo {
+  background-color: #4CAF50;
+  width: 40px;
+  height: 40px;
+  display: inline-block;
+  border-radius: 50%;
+}
+
+:root {
+  --v-primary-base: #4CAF50 !important;
+  --v-primary-darken-1: #388E3C !important;
+  --v-background-base: #F0FDFA !important;
+}
+
+.theme--dark {
+  --v-primary-base: #66BB6A !important;
+  --v-background-base: #1C352D !important;
+}
+
+.v-btn--primary {
+  background-color: var(--v-primary-base) !important;
+  border-radius: 8px;
+  padding: 12px 24px;
+}
+
+.v-btn:hover {
+  background-color: var(--v-primary-darken-1) !important;
+}
+
+.theme--dark .v-btn:hover {
+  background-color: #43A047 !important; /* Темный вариант для тёмной темы */
+}
+
+/* Отключаем анимацию для v-card в параллаксе */
+.v-parallax .v-card {
+  transition: none !important;
+  transform: none !important;
+}
+
+/* Анимация только для интерактивных карточек (например, nutri-card) */
+.v-card {
+  transition: all 0.3s;
+  border-radius: 12px;
+}
+
+.v-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+}
+
+.text-h4 {
+  color: #2E7D32;
+}
+
+.text-subtitle-1 {
+  color: #616161;
+}
+
+.theme--dark .text-h4 {
+  color: #A5D6A7 !important; /* Светло-зелёный для читаемости */
+}
+
+.theme--dark .text-subtitle-1 {
+  color: #B0BEC5 !important; /* Светло-серый для тёмной темы */
+}
+
+.glassmorphism {
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.theme--dark .glassmorphism {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+.bg-light {
+  background-color: #E8F5E9 !important;
+}
+
+.bg-primary {
+  background-color: #4CAF50 !important;
+}
+
+.text-white {
+  color: #FFF !important;
+}
+
+.text-dark {
+  color: #333 !important;
+}
+
+.pa-2 {
+  padding: 8px !important;
+}
+
+.rounded {
+  border-radius: 8px !important;
+}
+
+/* Для выравнивания карточек нутрициологов */
+.v-card .v-card-text {
+  min-height: 100px; /* Фиксированная минимальная высота для описания */
+}
+
+/* Убедимся, что футер не перекрывает глобальные стили */
+.v-footer a {
+  color: #FFFFFF !important;
+}
