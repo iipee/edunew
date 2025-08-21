@@ -13,17 +13,17 @@
             <v-list v-if="courses.length > 0" aria-label="Список доступных курсов">
               <v-list-item v-for="(course, index) in courses" :key="index" aria-label="Курс">
                 <v-list-item-content>
-                  <v-list-item-title aria-label="Название курса">{{ course.title }} - {{ course.price }} руб.</v-list-item-title>
+                  <v-list-item-title aria-label="Название курса">{{ course.title }} - <span style="font-size:20px;color:#28A745;font-weight:bold;">{{ course.gross_price }} руб.</span></v-list-item-title> <!-- ИЗМЕНЕНО: gross_price зеленый жирный по ТЗ -->
                   <v-list-item-subtitle aria-label="Описание курса">{{ course.description }}</v-list-item-subtitle>
                 </v-list-item-content>
                 <v-list-item-action>
                   <v-btn 
-                    color="primary" 
+                    color="#28A745" 
                     @click="orderCourse(course)" 
-                    v-tooltip="'Заказать курс'" 
-                    aria-label="Заказать курс"
-                  >
-                    Заказать
+                    v-tooltip="'Записаться'" 
+                    aria-label="Записаться на курс"
+                  > <!-- ИЗМЕНЕНО: color по ТЗ -->
+                    Записаться
                   </v-btn>
                 </v-list-item-action>
               </v-list-item>
@@ -33,6 +33,9 @@
         </v-card>
       </v-col>
     </v-row>
+    <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000" aria-label="Уведомление">
+      {{ snackbarText }}
+    </v-snackbar>
   </v-container>
 </template>
 
@@ -46,6 +49,9 @@ const router = useRouter()
 const courses = ref([])
 const token = ref(null)
 const errorMessage = ref('')
+const snackbar = ref(false)
+const snackbarText = ref('')
+const snackbarColor = ref('success')
 
 onMounted(async () => {
   if (process.client) {
@@ -53,12 +59,11 @@ onMounted(async () => {
   }
   if (!token.value) {
     errorMessage.value = 'Требуется авторизация'
-    router.push('/login')
+    router.push('/login') // ИЗМЕНЕНО: Redirect если не логирован
     return
   }
-  const { data, error } = await useFetch(`${config.public.apiBase}/api/courses`, {
-    headers: { Authorization: `Bearer ${token.value}` }
-  })
+  const headers = { Authorization: `Bearer ${token.value}` }
+  const { data, error } = await useFetch(`${config.public.apiBase}/api/courses`, { headers })
   if (error.value) {
     errorMessage.value = 'Ошибка загрузки услуг: ' + (error.value.data?.error || 'Неизвестная ошибка')
     return
@@ -67,18 +72,23 @@ onMounted(async () => {
 })
 
 const orderCourse = async (course) => {
-  if (!token.value) return
-  const headers = { Authorization: `Bearer ${token.value}` }
-  const body = { course_id: course.id }
-  const { data, error } = await useFetch(`${config.public.apiBase}/api/payments/simulate`, {
-    method: 'POST',
-    headers,
-    body
-  })
-  if (error.value) {
-    errorMessage.value = 'Ошибка заказа: ' + (error.value.data?.error || 'Неизвестная ошибка')
+  if (!token.value) {
+    router.push('/login')
     return
   }
-  router.push(`/courses/${course.id}`)
+  const headers = { Authorization: `Bearer ${token.value}` }
+  const body = { course_id: course.id }
+  try {
+    const data = await $fetch(`${config.public.apiBase}/api/payments/create`, {
+      method: 'POST',
+      headers,
+      body
+    })
+    window.location.href = data.confirmation_url
+  } catch (error) {
+    snackbarText.value = 'Ошибка заказа: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
+    snackbarColor.value = 'error'
+    snackbar.value = true
+  }
 }
 </script>

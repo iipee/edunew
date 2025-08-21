@@ -48,8 +48,8 @@ export const useCourseStore = defineStore('course', {
       const config = useRuntimeConfig()
       const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` }
       try {
-        const data = await $fetch(`${config.public.apiBase}/api/payments`, { headers })
-        this.isPaid = data && Array.isArray(data) ? data.some(p => p.course_id === parseInt(this.course.id) && p.status === 'success') : false
+        const data = await $fetch(`${config.public.apiBase}/api/enrolled`, { headers })
+        this.isPaid = data && Array.isArray(data) ? data.some(e => e.course_id === parseInt(this.course.id)) : false
         this.canReview = this.isPaid
       } catch (error) {
         this.error = error.message || 'Неизвестная ошибка'
@@ -60,12 +60,10 @@ export const useCourseStore = defineStore('course', {
     async submitPayment(courseId, userId) {
       const config = useRuntimeConfig()
       const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` }
-      const body = { course_id: parseInt(courseId), user_id: userId, amount: this.course.price }
+      const body = { course_id: parseInt(courseId) }
       try {
-        const data = await $fetch(`${config.public.apiBase}/api/payments/simulate`, { method: 'POST', headers, body })
-        this.transactionId = data.transaction_id
-        this.isPaid = true
-        this.canReview = true
+        const data = await $fetch(`${config.public.apiBase}/api/payments/create`, { method: 'POST', headers, body })
+        return data
       } catch (error) {
         this.error = error.message || 'Неизвестная ошибка'
         throw error

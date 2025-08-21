@@ -2,7 +2,7 @@
   <v-container>
     <v-row justify="center">
       <v-col cols="12" sm="8" md="6">
-        <v-card class="pa-6" aria-label="Профиль пользователя">
+        <v-card class="pa-6" elevation="2" style="border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);" aria-label="Профиль пользователя">
           <v-card-title class="justify-center">
             <h2 aria-label="Заголовок профиля">Профиль</h2>
             <v-btn 
@@ -42,62 +42,120 @@
             </v-form>
             <v-row v-else>
               <v-col cols="12">
-                <h3 aria-label="Имя пользователя">{{ profile.full_name || profile.username || 'Имя не указано' }}</h3>
+                <h3 style="font-size: 20px; color: #212529;" aria-label="Имя пользователя">{{ profile.full_name || profile.username || 'Имя не указано' }}</h3>
               </v-col>
               <v-col cols="12" v-if="profile.role === 'nutri'">
-                <h4 aria-label="Услуги">Услуги</h4>
-                <p v-if="profile.description" aria-label="Описание">{{ profile.description }}</p>
-                <p v-else aria-label="Описание не указано">Описание не указано</p>
+                <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Услуги">Услуги</h4>
+                <p v-if="profile.description" style="font-size: 16px; line-height: 1.5;" aria-label="Описание">{{ profile.description }}</p>
+                <p v-else style="font-size: 16px; color: #6C757D;" aria-label="Описание не указано">Описание не указано</p>
               </v-col>
-              <v-col cols="12" v-if="profile.role === 'nutri'">
-                <h4 aria-label="Мои курсы">Мои курсы</h4>
+              <v-col cols="12" v-if="role === 'nutri' && !otherId">
+                <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Баланс">Баланс: {{ profile.balance || 0 }} руб.</h4>
+              </v-col>
+              <v-col cols="12" v-if="role === 'nutri' && !otherId">
+                <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Реквизиты">Реквизиты</h4>
+                <v-form @submit.prevent="updateCard">
+                  <v-text-field 
+                    v-model="cardNumber" 
+                    label="Номер карты" 
+                    type="text" 
+                    :rules="[v => v.length === 16 && /^\d+$/.test(v) || 'Номер карты: 16 цифр']" 
+                    aria-label="Номер карты" 
+                  />
+                  <v-btn color="primary" type="submit" aria-label="Обновить карту">Обновить карту</v-btn>
+                </v-form>
+              </v-col>
+              <v-col cols="12">
+                <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Курсы">Курсы</h4>
+                <v-row v-if="courses.length > 0" class="mt-4">
+                  <v-col v-for="course in sortedCourses" :key="course.id" cols="12" sm="6" md="4">
+                    <NuxtLink :to="`/courses/${course.id}`" style="text-decoration: none; display: block;">
+                      <v-card 
+                        class="v-card v-theme--light v-card--density-default v-card--variant-elevated pa-4" 
+                        style="border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 366px; min-height: 100px; width: 100%; display: flex; flex-direction: column;"
+                        aria-label="Карточка курса"
+                      >
+                        <div class="v-row v-row--no-gutters align-center">
+                          <div class="v-col">
+                            <div class="v-card-title text-h6 pa-0" 
+                              style="font-size: 20px; color: #212529; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+                              aria-label="Название курса"
+                            >
+                              {{ course.title }}
+                            </div>
+                            <div class="v-card-subtitle pa-0 mt-2" 
+                              style="font-size: 16px; color: #6C757D; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+                              aria-label="Описание курса"
+                            >
+                              {{ course.description.slice(0, 50) }}...
+                            </div>
+                            <div class="mt-2" 
+                              style="font-size: 18px; color: #28A745; font-weight: bold;"
+                              aria-label="Цена курса"
+                            >
+                              Чистая: {{ course.net_price }} руб., Итоговая: {{ course.gross_price }} руб.
+                            </div>
+                          </div>
+                        </div>
+                      </v-card>
+                    </NuxtLink>
+                  </v-col>
+                </v-row>
+                <p v-else aria-label="Нет курсов">Нет курсов</p>
                 <v-btn 
+                  v-if="role === 'nutri' && !otherId" 
                   color="primary" 
                   to="/courses/create" 
-                  v-if="courses.length === 0 && !otherId && role === 'nutri'" 
+                  block 
+                  class="mt-4" 
                   v-tooltip="'Создать новый курс'" 
                   aria-label="Создать курс"
                 >
                   Создать курс
                 </v-btn>
-                <v-list v-else aria-label="Список курсов">
-                  <v-list-item v-for="(course, index) in sortedCourses" :key="index" aria-label="Курс">
-                    <v-list-item-title aria-label="Название курса">{{ course.title }} - {{ course.price }} руб.</v-list-item-title>
-                    <v-list-item-subtitle aria-label="Описание курса">{{ course.description }}</v-list-item-subtitle>
-                  </v-list-item>
-                </v-list>
               </v-col>
               <v-col cols="12" v-if="role === 'client' && !otherId">
-                <h4 aria-label="Записанные курсы">Записанные курсы</h4>
-                <v-list v-if="enrolled.length > 0" aria-label="Список записанных курсов">
-                  <v-list-item v-for="(course, index) in enrolled" :key="index" aria-label="Записанный курс">
-                    <v-list-item-title aria-label="Название курса">{{ course.title }}</v-list-item-title>
-                  </v-list-item>
-                </v-list>
-                <p v-else aria-label="Нет записанных курсов">Нет записанных курсов</p>
+                <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Записанные курсы">Записанные курсы</h4>
+                <v-row v-if="enrolled.length > 0">
+                  <v-col v-for="course in enrolled" :key="course.id" cols="12" sm="6" md="4">
+                    <NuxtLink :to="`/courses/${course.id}`" style="text-decoration: none; display: block;">
+                      <v-card 
+                        class="pa-4" 
+                        style="border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
+                        aria-label="Карточка записанного курса"
+                      >
+                        <v-card-title class="text-h6" aria-label="Название курса">{{ course.title }}</v-card-title>
+                        <v-card-subtitle aria-label="Описание курса">{{ course.description.slice(0, 50) }}...</v-card-subtitle>
+                      </v-card>
+                    </NuxtLink>
+                  </v-col>
+                </v-row>
+                <p v-else aria-label="Нет записей">Нет записей</p>
               </v-col>
               <v-col cols="12">
-                <h4 aria-label="Отзывы">Отзывы</h4>
+                <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Отзывы">Отзывы</h4>
                 <v-list v-if="reviews.length > 0" aria-label="Список отзывов">
-                  <v-list-item v-for="(review, index) in reviews" :key="index" aria-label="Отзыв">
-                    <v-list-item-title aria-label="Содержание отзыва">{{ review.content }}</v-list-item-title>
-                    <v-list-item-subtitle aria-label="Автор отзыва">— Пользователь #{{ review.author_id }}</v-list-item-subtitle>
+                  <v-list-item v-for="(review, i) in reviews" :key="i">
+                    <v-list-item-content>
+                      <v-list-item-title aria-label="Содержание отзыва">{{ review.content }}</v-list-item-title>
+                    </v-list-item-content>
                   </v-list-item>
                 </v-list>
-                <p v-else aria-label="Отзывов нет">Отзывов нет</p>
+                <p v-else aria-label="Нет отзывов">Нет отзывов</p>
+              </v-col>
+              <v-col cols="12" v-if="otherId && isLoggedIn">
+                <v-btn 
+                  color="primary" 
+                  block 
+                  @click="openChat" 
+                  v-tooltip="'Открыть чат'" 
+                  aria-label="Открыть чат"
+                >
+                  Открыть чат
+                </v-btn>
               </v-col>
             </v-row>
           </v-card-text>
-          <v-btn 
-            v-if="profile.role === 'nutri' && isLoggedIn && role === 'client'" 
-            color="primary" 
-            block 
-            @click="openChat" 
-            v-tooltip="'Связаться с нутрициологом'" 
-            aria-label="Связаться с нутрициологом"
-          >
-            Связаться
-          </v-btn>
         </v-card>
       </v-col>
     </v-row>
@@ -105,41 +163,34 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
-import { useRuntimeConfig } from 'nuxt/app'
-import { useRoute, useRouter } from 'vue-router'
-import { useNuxtApp } from 'nuxt/app'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter, useRuntimeConfig } from 'nuxt/app'
 
-const { $emitter } = useNuxtApp()
-const emitter = $emitter
 const config = useRuntimeConfig()
 const route = useRoute()
 const router = useRouter()
-const otherId = ref(route.params.id || null)
 const profile = ref({})
 const courses = ref([])
 const enrolled = ref([])
 const reviews = ref([])
+const editMode = ref(false)
+const cardNumber = ref('')
+const errorMessage = ref('')
 const token = ref(null)
 const role = ref('')
 const userId = ref(null)
-const editMode = ref(false)
-const errorMessage = ref('')
-
-const sortedCourses = computed(() => {
-  return [...courses.value].sort((a, b) => a.title.localeCompare(b.title) || a.id - b.id)
-})
-
+const otherId = ref(route.params.id || null)
 const isLoggedIn = computed(() => !!token.value)
+
+const sortedCourses = computed(() => [...courses.value].sort((a, b) => a.title.localeCompare(b.title) || a.id - b.id))
 
 onMounted(async () => {
   if (process.client) {
     token.value = localStorage.getItem('token')
-    role.value = localStorage.getItem('role') || ''
+    role.value = localStorage.getItem('role')
     userId.value = localStorage.getItem('userId') ? parseInt(localStorage.getItem('userId')) : null
   }
   await loadProfile()
-  emitter.on('login', loadProfile)
 })
 
 watch(() => route.params.id, async (newId) => {
@@ -188,6 +239,21 @@ const updateProfile = async () => {
     await loadProfile()
   } catch (error) {
     errorMessage.value = 'Ошибка обновления профиля: ' + (error.message || 'Неизвестная ошибка')
+  }
+}
+
+const updateCard = async () => {
+  const headers = { Authorization: `Bearer ${token.value}` }
+  const body = { card_number: cardNumber.value }
+  try {
+    await $fetch(`${config.public.apiBase}/api/profile/update-card`, { 
+      method: 'POST', 
+      headers, 
+      body 
+    })
+    errorMessage.value = 'Карта обновлена'
+  } catch (error) {
+    errorMessage.value = 'Ошибка обновления карты: ' + (error.message || 'Неизвестная ошибка')
   }
 }
 

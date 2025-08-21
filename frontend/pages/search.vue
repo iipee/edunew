@@ -46,69 +46,61 @@
               </p>
               <p v-if="course.services.length > 3" style="font-size: 16px; color: #212529; margin: 4px 0;">...</p>
             </div>
-            <p style="font-size: 16px; line-height: 1.5; color: #6C757D; margin: 16px 0;">{{ course.description.slice(0, 100) }}...</p>
-            <p style="font-size: 20px; color: #28A745; font-weight: bold; margin: 16px 0;" aria-label="Цена курса">
-              Цена: {{ course.price }} руб.
+            <p style="font-size: 16px; line-height: 1.5; color: #6C757D; margin: 16px 0;">
+              {{ course.description.slice(0, 100) }}...
+            </p>
+            <p 
+              style="font-size: 20px; color: #28A745; font-weight: bold;" 
+              aria-label="Цена курса"
+            >
+              {{ role === 'nutri' && course.teacher.id === userId ? course.net_price : course.gross_price }} руб.
             </p>
           </v-card-text>
-          <v-card-actions style="display: flex; justify-content: space-between; gap: 8px;">
-            <v-btn
-              color="#28A745"
-              :to="`/courses/${course.id}`"
-              style="min-width: 100px;"
-              v-tooltip="'Узнать подробности о курсе'"
-              aria-label="Подробней"
+          <v-card-actions>
+            <v-btn 
+              color="#28A745" 
+              @click="enroll(course.id)" 
+              v-tooltip="'Записаться на курс'" 
+              aria-label="Записаться на курс"
             >
-              Подробней
+              Записаться
             </v-btn>
-            <v-btn
-              v-if="isLoggedIn"
-              outlined
-              color="#6C757D"
-              @click="openChat(course.teacher.id)"
-              style="min-width: 100px;"
-              v-tooltip="'Связаться с автором'"
-              aria-label="Связаться"
+            <v-btn 
+              color="primary" 
+              @click="openChat(course.teacher.id)" 
+              v-tooltip="'Чат с автором'" 
+              aria-label="Чат с автором"
             >
-              Связаться
-            </v-btn>
-            <v-btn
-              v-else
-              to="/login"
-              style="min-width: 100px;"
-              v-tooltip="'Войти для действий'"
-              aria-label="Войти"
-            >
-              Войти
+              Чат
             </v-btn>
           </v-card-actions>
         </v-card>
       </v-col>
-      <v-col cols="12" v-if="!loading && courses.length === 0">
-        <p class="text-center" style="font-size: 16px; color: #6C757D;" aria-label="Нет результатов поиска">Нет результатов</p>
-      </v-col>
     </v-row>
-    <v-snackbar v-model="snackbar" color="error" timeout="3000" aria-label="Уведомление об ошибке">
-      {{ errorMessage }}
+    <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000" aria-label="Уведомление">
+      {{ snackbarText }}
     </v-snackbar>
   </v-container>
 </template>
 
 <script setup>
-import { ref, onMounted, watch, computed } from 'vue'
-import { debounce } from 'lodash'
-import { useRuntimeConfig } from 'nuxt/app'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useRuntimeConfig } from 'nuxt/app'
+import debounce from 'lodash/debounce'
 
 const config = useRuntimeConfig()
 const router = useRouter()
 const searchQuery = ref('')
 const courses = ref([])
 const token = ref(null)
-const isLoggedIn = ref(false)
+const role = ref('')
+const userId = ref(null)
+const isLoggedIn = computed(() => !!token.value)
 const loading = ref(true)
 const snackbar = ref(false)
-const errorMessage = ref('')
+const snackbarText = ref('')
+const snackbarColor = ref('error')
 
 const searchFieldStyle = computed(() => ({
   backgroundColor: '#FFFFFF',
@@ -121,7 +113,8 @@ const searchFieldStyle = computed(() => ({
 onMounted(() => {
   if (process.client) {
     token.value = localStorage.getItem('token')
-    isLoggedIn.value = !!token.value
+    role.value = localStorage.getItem('role')
+    userId.value = localStorage.getItem('userId') ? parseInt(localStorage.getItem('userId')) : null
   }
   search()
 })
@@ -134,7 +127,8 @@ const search = async () => {
     const data = await $fetch(`${config.public.apiBase}/api/search?q=${encodeURIComponent(query)}`, { headers })
     courses.value = data || []
   } catch (error) {
-    errorMessage.value = 'Ошибка поиска: ' + (error.message || 'Неизвестная ошибка')
+    snackbarText.value = 'Ошибка поиска: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
+    snackbarColor.value = 'error'
     snackbar.value = true
     courses.value = []
   } finally {
@@ -170,7 +164,8 @@ const openChat = async (teacherId) => {
     })
     router.push(`/chats?selected=${data.receiver_id}`)
   } catch (error) {
-    errorMessage.value = 'Ошибка открытия чата: ' + (error.message || 'Неизвестная ошибка')
+    snackbarText.value = 'Ошибка открытия чата: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
+    snackbarColor.value = 'error'
     snackbar.value = true
   }
 }

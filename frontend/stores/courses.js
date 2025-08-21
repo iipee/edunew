@@ -17,7 +17,7 @@ export const useCoursesStore = defineStore('courses', {
       try {
         const query = new URLSearchParams(params).toString()
         const headers = process.client && localStorage.getItem('token') ? { Authorization: `Bearer ${localStorage.getItem('token')}` } : {}
-        const { data } = await $fetch(`${config.public.apiBase}/api/search?${query}`, { headers })
+        const data = await $fetch(`${config.public.apiBase}/api/search?${query}`, { headers })
         this.courses = data || []
       } catch (error) {
         this.error = error.message || 'Неизвестная ошибка'

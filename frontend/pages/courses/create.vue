@@ -36,13 +36,13 @@
                 aria-label="Описание курса"
               />
               <v-text-field
-                v-model="form.price"
-                label="Стоимость (руб.)"
+                v-model="form.net_price"
+                label="Чистая цена (руб.)"
                 prepend-icon="mdi-currency-rub"
                 type="number"
                 :rules="[v => !!v || 'Стоимость обязательна', v => v > 0 || 'Стоимость должна быть больше 0']"
                 required
-                aria-label="Стоимость"
+                aria-label="Чистая цена"
               />
               <v-text-field
                 v-model="form.video_url"
@@ -83,7 +83,7 @@ const form = ref({
   title: '',
   services: '',
   description: '',
-  price: null,
+  net_price: null,
   video_url: ''
 })
 const token = ref(null)
@@ -115,7 +115,7 @@ const createCourse = async () => {
     title: form.value.title,
     services: servicesArray,
     description: form.value.description,
-    price: parseFloat(form.value.price),
+    net_price: parseFloat(form.value.net_price),
     video_url: form.value.video_url
   }
   const { data, error } = await useFetch(`${config.public.apiBase}/api/courses`, { 

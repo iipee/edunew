@@ -1,13 +1,20 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql/driver"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -52,16 +59,18 @@ var upgrader = websocket.Upgrader{
 }
 
 type User struct {
-	ID          int         `json:"id" gorm:"primaryKey"`
-	Username    string      `json:"username" gorm:"unique;not null"`
-	Email       string      `json:"email" gorm:"unique;not null"`
-	Password    string      `json:"password" gorm:"not null"`
-	Role        string      `json:"role" gorm:"not null"`
-	FullName    string      `json:"full_name"`
-	Description string      `json:"description"`
-	AvatarURL   string      `json:"avatar_url"`
-	Services    StringArray `json:"services" gorm:"type:jsonb"`
-	CreatedAt   time.Time   `json:"created_at" gorm:"autoCreateTime"`
+	ID            int             `json:"id" gorm:"primaryKey"`
+	Username      string          `json:"username" gorm:"unique;not null"`
+	Email         string          `json:"email" gorm:"unique;not null"`
+	Password      string          `json:"password" gorm:"not null"`
+	Role          string          `json:"role" gorm:"not null"`
+	FullName      string          `json:"full_name"`
+	Description   string          `json:"description"`
+	AvatarURL     string          `json:"avatar_url"`
+	Services      StringArray     `json:"services" gorm:"type:jsonb"`
+	Balance       decimal.Decimal `json:"balance" gorm:"type:decimal(10,2);default:0"`
+	EncryptedCard string          `json:"encrypted_card"`
+	CreatedAt     time.Time       `json:"created_at" gorm:"autoCreateTime"`
 }
 
 type Course struct {
@@ -69,723 +78,824 @@ type Course struct {
 	TeacherID   int             `json:"teacher_id"`
 	Title       string          `json:"title" gorm:"not null"`
 	Services    StringArray     `json:"services" gorm:"type:jsonb"`
-	Description string          `json:"description" gorm:"not null"`
-	Price       decimal.Decimal `json:"price" gorm:"type:decimal(10,2);not null"`
+	Description string          `json:"description"`
+	NetPrice    decimal.Decimal `json:"net_price" gorm:"type:decimal(10,2)"`
+	GrossPrice  decimal.Decimal `json:"gross_price" gorm:"type:decimal(10,2)"`
 	VideoURL    string          `json:"video_url"`
-	Teacher     User            `json:"teacher" gorm:"foreignKey:TeacherID"`
 	CreatedAt   time.Time       `json:"created_at" gorm:"autoCreateTime"`
+	Teacher     User            `json:"teacher" gorm:"foreignKey:TeacherID"`
+}
+
+type Review struct {
+	ID        int       `json:"id" gorm:"primaryKey"`
+	CourseID  int       `json:"course_id"`
+	AuthorID  int       `json:"author_id"`
+	Content   string    `json:"content" gorm:"not null"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
+	Author    User      `json:"author" gorm:"foreignKey:AuthorID"`
+}
+
+type Enrollment struct {
+	ID        int       `json:"id" gorm:"primaryKey"`
+	UserID    int       `json:"user_id"`
+	CourseID  int       `json:"course_id"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
 }
 
 type Payment struct {
 	ID            int             `json:"id" gorm:"primaryKey"`
 	UserID        int             `json:"user_id"`
 	CourseID      int             `json:"course_id"`
-	Amount        decimal.Decimal `json:"amount" gorm:"type:decimal(10,2);not null"`
-	Commission    decimal.Decimal `json:"commission" gorm:"type:decimal(10,2);not null"`
-	NetAmount     decimal.Decimal `json:"net_amount" gorm:"type:decimal(10,2);not null"`
+	GrossAmount   decimal.Decimal `json:"gross_amount" gorm:"type:decimal(10,2)"`
+	Commission    decimal.Decimal `json:"commission" gorm:"type:decimal(10,2)"`
+	NetAmount     decimal.Decimal `json:"net_amount" gorm:"type:decimal(10,2)"`
 	Status        string          `json:"status" gorm:"default:'pending'"`
+	YookassaID    string          `json:"yookassa_id"`
 	TransactionID string          `json:"transaction_id"`
 	CreatedAt     time.Time       `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt     time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type Message struct {
-	ID         int       `json:"id" gorm:"primaryKey"`
-	SenderID   int       `json:"sender_id"`
-	ReceiverID int       `json:"receiver_id"`
-	Content    string    `json:"content" gorm:"not null"`
-	Read       bool      `json:"read" gorm:"default:false"`
-	CreatedAt  time.Time `json:"created_at" gorm:"autoCreateTime"`
-}
-
-type Notification struct {
-	ID        int       `json:"id" gorm:"primaryKey"`
-	UserID    int       `json:"user_id"`
-	Type      string    `json:"type" gorm:"not null"`
-	RelatedID int       `json:"related_id"`
-	Content   string    `json:"content" gorm:"not null"`
-	Read      bool      `json:"read" gorm:"default:false"`
-	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
-}
-
-type Review struct {
-	ID             int       `json:"id" gorm:"primaryKey"`
-	CourseID       int       `json:"course_id"`
-	AuthorID       int       `json:"author_id"`
-	ReviewedUserID int       `json:"reviewed_user_id"`
-	Content        string    `json:"content" gorm:"not null"`
-	CreatedAt      time.Time `json:"created_at" gorm:"autoCreateTime"`
-}
-
-type Dialog struct {
-	UserID      int    `json:"user_id"`
-	FullName    string `json:"full_name"`
-	AvatarURL   string `json:"avatar_url"`
-	LastMessage string `json:"last_message"`
-	UnreadCount int    `json:"unread_count"`
+	ID         int        `json:"id" gorm:"primaryKey"`
+	SenderID   int        `json:"sender_id"`
+	ReceiverID int        `json:"receiver_id"`
+	Content    string     `json:"content" gorm:"not null"`
+	CreatedAt  time.Time  `json:"created_at" gorm:"autoCreateTime"`
+	ReadAt     *time.Time `json:"read_at"`
 }
 
 func main() {
-	// Загружаем .env файл
 	err := godotenv.Load()
 	if err != nil {
-		log.Println("Warning: Could not load .env file, using system environment variables")
+		log.Println("Ошибка загрузки .env файла:", err)
 	}
 
-	if os.Getenv("JWT_SECRET") == "" {
-		panic("JWT_SECRET not set")
-	}
-	dsn := os.Getenv("DATABASE_URL")
+	dsn := os.Getenv("DB_DSN")
 	if dsn == "" {
-		dsn = "host=localhost user=postgres password=adminadmiadmadanim dbname=education_for sslmode=disable"
+		log.Fatal("DB_DSN не установлен в .env")
 	}
-	var errDb error
-	db, errDb = gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if errDb != nil {
-		panic("Не удалось подключиться к базе данных: " + errDb.Error())
+
+	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("Ошибка подключения к БД: %v", err)
 	}
-	db.AutoMigrate(&User{}, &Course{}, &Payment{}, &Message{}, &Notification{}, &Review{})
-	// Test data
-	testPassword, _ := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.DefaultCost)
-	db.Create(&User{Username: "nutri1", Email: "nutri1@example.com", Password: string(testPassword), Role: "nutri", FullName: "Nutri One", Description: "Expert in nutrition", AvatarURL: "/images/nutri-placeholder.jpg"})
-	db.Create(&Course{TeacherID: 1, Title: "Nutrition Course 1", Services: StringArray{"Consultation"}, Description: "Learn nutrition basics", Price: decimal.NewFromFloat(100.00), VideoURL: "https://example.com/video1"})
-	db.Create(&Course{TeacherID: 1, Title: "Nutrition Course 2", Services: StringArray{"Detox"}, Description: "Detox program", Price: decimal.NewFromFloat(200.00), VideoURL: "https://example.com/video2"})
-	db.Create(&User{Username: "client1", Email: "client1@example.com", Password: string(testPassword), Role: "client", FullName: "Client One"})
+
+	err = db.AutoMigrate(&User{}, &Course{}, &Review{}, &Enrollment{}, &Message{}, &Payment{})
+	if err != nil {
+		log.Fatalf("Ошибка миграции БД: %v", err)
+	}
+
 	r = gin.Default()
+	r.Use(gin.Logger())
+	r.Use(gin.Recovery())
+
 	r.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
 		}
 		c.Next()
 	})
-	r.GET("/api", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "API is running"})
-	})
-	r.POST("/api/register", registerUser)
-	r.POST("/api/login", loginUser)
-	r.GET("/api/profile", authMiddleware(), getOwnProfile)
+
+	r.POST("/api/register", register)
+	r.POST("/api/login", login)
+	r.GET("/api/profile", authMiddleware, getProfile)
+	r.PUT("/api/profile", authMiddleware, updateProfile)
+	r.POST("/api/profile/update-card", authMiddleware, handleUpdateCard)
 	r.GET("/api/profile/:id", getOtherProfile)
-	r.PUT("/api/profile", authMiddleware(), updateProfile)
-	r.GET("/api/search", searchCourses)
-	r.GET("/api/courses", authMiddleware(), getCourses)
-	r.POST("/api/courses", authMiddleware("nutri"), createCourse)
-	r.PUT("/api/courses/:id", authMiddleware("nutri"), updateCourse)
-	r.GET("/api/courses/:id", getCourseById)
-	r.DELETE("/api/courses/:id", authMiddleware("nutri"), deleteCourse)
-	r.POST("/api/payments/simulate", authMiddleware("client"), simulatePayment)
-	r.GET("/api/payments", authMiddleware(), getPayments)
-	r.GET("/api/enrolled", authMiddleware("client"), getEnrolledCourses)
-	r.POST("/api/messages", authMiddleware(), sendMessage)
-	r.GET("/api/messages", authMiddleware(), getMessages)
-	r.PUT("/api/messages/read", authMiddleware(), markMessagesRead)
-	r.GET("/api/notifications", authMiddleware(), getNotifications)
-	r.PUT("/api/notifications/:id/read", authMiddleware(), markNotificationRead)
-	r.POST("/api/reviews", authMiddleware("client"), createReview)
-	r.GET("/api/reviews/user/:user_id", getReviewsByUser)
-	r.GET("/api/reviews/course/:course_id", getReviewsByCourse)
 	r.GET("/api/nutris", getNutris)
+	r.GET("/api/search", searchCourses)
+	r.POST("/api/courses", authMiddleware, createCourse)
+	r.GET("/api/courses/:id", getCourse)
+	r.POST("/api/reviews", authMiddleware, createReview)
+	r.GET("/api/reviews/course/:id", getCourseReviews)
+	r.GET("/api/reviews/user/:id", getUserReviews)
 	r.GET("/api/reviews/random", getRandomReviews)
-	r.POST("/api/start-chat", authMiddleware("client"), startChat)
-	r.GET("/api/chats", authMiddleware(), getChats)
+	r.GET("/api/enrolled", authMiddleware, getEnrolled)
+	r.POST("/api/payments/create", authMiddleware, createPayment)
+	r.GET("/api/payments/return", authMiddleware, getPaymentReturn)
+	r.POST("/webhook/yookassa", webhookHandler)
+	r.POST("/api/start-chat", authMiddleware, startChat)
+	r.GET("/api/chats", authMiddleware, getChats)
+	r.GET("/api/messages", authMiddleware, getMessages)
+	r.POST("/api/messages", authMiddleware, sendMessage)
+	r.PUT("/api/messages/read", authMiddleware, markRead)
 	r.GET("/ws", func(c *gin.Context) {
 		handleWebSocket(c.Writer, c.Request)
 	})
-	if err := r.Run(":8080"); err != nil {
-		log.Fatal("Ошибка запуска сервера: ", err)
-	}
+
+	log.Fatal(r.Run(":8080"))
 }
 
-func authMiddleware(requiredRoles ...string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		tokenString := c.GetHeader("Authorization")
-		if tokenString == "" || len(tokenString) <= 7 || tokenString[:7] != "Bearer " {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Токен не предоставлен"})
-			c.Abort()
-			return
-		}
-		tokenString = tokenString[7:]
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			return []byte(os.Getenv("JWT_SECRET")), nil
-		})
-		if err != nil || !token.Valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверный токен"})
-			c.Abort()
-			return
-		}
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверные данные токена"})
-			c.Abort()
-			return
-		}
-		userID := int(claims["id"].(float64))
-		role := claims["role"].(string)
-		c.Set("user_id", userID)
-		c.Set("role", role)
-		if len(requiredRoles) > 0 && !containsRole(requiredRoles, role) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Недостаточно прав"})
-			c.Abort()
-			return
-		}
-		c.Next()
-	}
-}
-
-func containsRole(roles []string, role string) bool {
-	for _, r := range roles {
-		if r == role {
-			return true
-		}
-	}
-	return false
-}
-
-func registerUser(c *gin.Context) {
-	var user User
-	if err := c.ShouldBindJSON(&user); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+func authMiddleware(c *gin.Context) {
+	tokenString := c.GetHeader("Authorization")
+	if tokenString == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Токен не предоставлен"})
+		c.Abort()
 		return
 	}
-	if user.Role == "nutri" && user.Description == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Описание обязательно для нутрициолога"})
+	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		return []byte(os.Getenv("JWT_SECRET")), nil
+	})
+	if err != nil || !token.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверный токен"})
+		c.Abort()
 		return
 	}
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверные данные токена"})
+		c.Abort()
+		return
+	}
+	userID := int(claims["id"].(float64))
+	c.Set("userID", userID)
+	c.Set("role", claims["role"])
+	c.Next()
+}
+
+func register(c *gin.Context) {
+	var input struct {
+		FullName    string `json:"full_name"`
+		Username    string `json:"username"`
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		Role        string `json:"role"`
+		Description string `json:"description"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
+		return
+	}
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.Password), 14)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось хэшировать пароль"})
+		log.Printf("Ошибка хеширования пароля: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка хеширования пароля"})
 		return
 	}
-	user.Password = string(hashedPassword)
-	if user.AvatarURL == "" {
-		user.AvatarURL = "/images/nutri-placeholder.jpg"
+	user := User{
+		Username:    input.Username,
+		Email:       input.Email,
+		Password:    string(hashedPassword),
+		Role:        input.Role,
+		FullName:    input.FullName,
+		Description: input.Description,
 	}
 	if err := db.Create(&user).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Не удалось создать пользователя: " + err.Error()})
+		log.Printf("Ошибка регистрации: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка регистрации"})
 		return
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"id":   user.ID,
 		"role": user.Role,
-		"exp":  time.Now().Add(time.Hour * 72).Unix(),
+		"exp":  time.Now().Add(time.Hour * 24).Unix(),
 	})
 	tokenString, err := token.SignedString([]byte(os.Getenv("JWT_SECRET")))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось сгенерировать токен"})
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{"token": tokenString, "role": user.Role, "id": user.ID})
-}
-
-func loginUser(c *gin.Context) {
-	var creds struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := c.ShouldBindJSON(&creds); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	var user User
-	if err := db.Where("username = ?", creds.Username).First(&user).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверные учетные данные"})
-		return
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(creds.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверные учетные данные"})
-		return
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"id":   user.ID,
-		"role": user.Role,
-		"exp":  time.Now().Add(time.Hour * 72).Unix(),
-	})
-	tokenString, err := token.SignedString([]byte(os.Getenv("JWT_SECRET")))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось сгенерировать токен"})
+		log.Printf("Ошибка создания токена: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания токена"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"token": tokenString, "role": user.Role, "id": user.ID})
 }
 
-func getOwnProfile(c *gin.Context) {
-	userID := c.GetInt("user_id")
+func login(c *gin.Context) {
+	var input struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
+		return
+	}
+	var user User
+	if err := db.Where("username = ?", input.Username).First(&user).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверные данные"})
+		return
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверные данные"})
+		return
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"id":   user.ID,
+		"role": user.Role,
+		"exp":  time.Now().Add(time.Hour * 24).Unix(),
+	})
+	tokenString, err := token.SignedString([]byte(os.Getenv("JWT_SECRET")))
+	if err != nil {
+		log.Printf("Ошибка создания токена: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания токена"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"token": tokenString, "role": user.Role, "id": user.ID})
+}
+
+func getProfile(c *gin.Context) {
+	userID := c.GetInt("userID")
 	var user User
 	if err := db.First(&user, userID).Error; err != nil {
+		log.Printf("Пользователь не найден: %v", err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
 		return
 	}
-	user.Password = ""
 	var courses []Course
 	db.Where("teacher_id = ?", userID).Find(&courses)
 	c.JSON(http.StatusOK, gin.H{"profile": user, "courses": courses})
 }
 
-func getOtherProfile(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
-		return
-	}
-	var user User
-	if err := db.First(&user, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
-		return
-	}
-	user.Password = ""
-	var courses []Course
-	db.Where("teacher_id = ?", id).Find(&courses)
-	c.JSON(http.StatusOK, gin.H{"profile": user, "courses": courses})
-}
-
 func updateProfile(c *gin.Context) {
-	userID := c.GetInt("user_id")
-	var input User
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	userID := c.GetInt("userID")
+	var input struct {
+		FullName    string `json:"full_name"`
+		Description string `json:"description"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	if err := db.Model(&User{}).Where("id = ?", userID).Updates(map[string]interface{}{
 		"full_name":   input.FullName,
 		"description": input.Description,
-		"avatar_url":  input.AvatarURL,
 	}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось обновить профиль"})
+		log.Printf("Ошибка обновления профиля: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Профиль обновлен"})
 }
 
+func handleUpdateCard(c *gin.Context) {
+	userID := c.GetInt("userID")
+	var input struct {
+		CardNumber string `json:"card_number"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
+		return
+	}
+	if len(input.CardNumber) != 16 || !regexp.MustCompile(`^\d{16}$`).MatchString(input.CardNumber) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный номер карты (16 цифр)"})
+		return
+	}
+	key := []byte(os.Getenv("AES_KEY"))
+	if len(key) != 32 {
+		log.Printf("Ошибка: AES_KEY должен быть 32 байта")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка конфигурации шифрования"})
+		return
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		log.Printf("Ошибка создания AES: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
+		return
+	}
+	plaintext := []byte(input.CardNumber)
+	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
+	iv := ciphertext[:aes.BlockSize]
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		log.Printf("Ошибка IV: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
+		return
+	}
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintext)
+	encrypted := hex.EncodeToString(ciphertext)
+	if err := db.Model(&User{}).Where("id = ?", userID).Update("encrypted_card", encrypted).Error; err != nil {
+		log.Printf("Ошибка обновления карты: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Карта обновлена"})
+}
+
+func getOtherProfile(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID пользователя"})
+		return
+	}
+	var user User
+	if err := db.First(&user, id).Error; err != nil {
+		log.Printf("Пользователь не найден: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
+		return
+	}
+	var courses []Course
+	db.Where("teacher_id = ?", id).Find(&courses)
+	c.JSON(http.StatusOK, gin.H{"profile": user, "courses": courses})
+}
+
+func getNutris(c *gin.Context) {
+	limit, err := strconv.Atoi(c.Query("limit"))
+	if err != nil {
+		limit = 10
+	}
+	random := c.Query("random") == "true"
+	var users []User
+	query := db.Where("role = ?", "nutri").Limit(limit)
+	if random {
+		query = query.Order("RANDOM()")
+	}
+	query.Find(&users)
+	c.JSON(http.StatusOK, users)
+}
+
 func searchCourses(c *gin.Context) {
 	query := c.Query("q")
 	var courses []Course
-	q := db.Preload("Teacher").Where("teacher_id IN (SELECT id FROM users WHERE role = 'nutri')")
-	if query != "" {
-		query = "%" + strings.ToLower(query) + "%"
-		q = q.Where("LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR services @> ?", query, query, fmt.Sprintf(`["%s"]`, query))
-	}
-	if err := q.Order("title ASC, id ASC").Find(&courses).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка поиска курсов"})
-		return
-	}
-	for i := range courses {
-		courses[i].Teacher.Password = ""
-	}
-	c.JSON(http.StatusOK, courses)
-}
-
-func getCourses(c *gin.Context) {
-	var courses []Course
-	teacherID := c.GetInt("user_id")
-	if err := db.Preload("Teacher").Where("teacher_id = ?", teacherID).Find(&courses).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка загрузки курсов"})
-		return
-	}
-	for i := range courses {
-		courses[i].Teacher.Password = ""
+	if query == "" {
+		db.Preload("Teacher").Find(&courses)
+	} else {
+		db.Preload("Teacher").Where("title ILIKE ? OR description ILIKE ? OR ? = ANY(services)", "%"+query+"%", "%"+query+"%", query).Find(&courses)
 	}
 	c.JSON(http.StatusOK, courses)
 }
 
 func createCourse(c *gin.Context) {
-	var course Course
-	if err := c.ShouldBindJSON(&course); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный формат данных: " + err.Error()})
+	userID := c.GetInt("userID")
+	role := c.GetString("role")
+	if role != "nutri" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Доступ только для нутрициологов"})
 		return
 	}
-	if course.Price.LessThanOrEqual(decimal.Zero) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Стоимость должна быть больше 0"})
+	var input struct {
+		Title       string   `json:"title"`
+		Services    []string `json:"services"`
+		Description string   `json:"description"`
+		NetPrice    float64  `json:"net_price"`
+		VideoURL    string   `json:"video_url"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
-	if len(course.Services) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Укажите хотя бы одну услугу"})
+	if input.NetPrice <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Цена должна быть больше 0"})
 		return
 	}
-	course.TeacherID = c.GetInt("user_id")
+	netPrice := decimal.NewFromFloat(input.NetPrice)
+	grossPrice := netPrice.Mul(decimal.NewFromFloat(1.5))
+	course := Course{
+		TeacherID:   userID,
+		Title:       input.Title,
+		Services:    input.Services,
+		Description: input.Description,
+		NetPrice:    netPrice,
+		GrossPrice:  grossPrice,
+		VideoURL:    input.VideoURL,
+	}
 	if err := db.Create(&course).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Не удалось создать курс: " + err.Error()})
-		return
-	}
-	c.JSON(http.StatusCreated, course)
-}
-
-func updateCourse(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
-		return
-	}
-	var course Course
-	if err := c.ShouldBindJSON(&course); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	course.ID = id
-	if err := db.Where("id = ? AND teacher_id = ?", id, c.GetInt("user_id")).Updates(&course).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Курс не найден или не принадлежит вам"})
+		log.Printf("Ошибка создания курса: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания курса"})
 		return
 	}
 	c.JSON(http.StatusOK, course)
 }
 
-func getCourseById(c *gin.Context) {
+func getCourse(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID курса"})
 		return
 	}
 	var course Course
 	if err := db.Preload("Teacher").First(&course, id).Error; err != nil {
+		log.Printf("Курс не найден: %v", err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "Курс не найден"})
 		return
 	}
-	course.Teacher.Password = ""
 	c.JSON(http.StatusOK, course)
 }
 
-func deleteCourse(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
-		return
-	}
-	if err := db.Where("id = ? AND teacher_id = ?", id, c.GetInt("user_id")).Delete(&Course{}).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Курс не найден или не принадлежит вам"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "Курс удален"})
-}
-
-func simulatePayment(c *gin.Context) {
-	var input struct {
-		CourseID int             `json:"course_id"`
-		UserID   int             `json:"user_id"`
-		Amount   decimal.Decimal `json:"amount"`
-	}
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	var course Course
-	if err := db.First(&course, input.CourseID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Курс не найден"})
-		return
-	}
-	var existing Payment
-	if db.Where("user_id = ? AND course_id = ? AND status = 'success'", input.UserID, input.CourseID).First(&existing).Error == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Курс уже оплачен"})
-		return
-	}
-	if !input.Amount.Equal(course.Price.Mul(decimal.NewFromFloat(1.5))) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверная сумма оплаты"})
-		return
-	}
-	amount := input.Amount
-	commission := amount.Mul(decimal.NewFromFloat(0.333333))
-	netAmount := amount.Sub(commission)
-	transactionID := "TX-" + strconv.Itoa(rand.Intn(1000000))
-	payment := Payment{
-		UserID:        input.UserID,
-		CourseID:      input.CourseID,
-		Amount:        amount,
-		Commission:    commission,
-		NetAmount:     netAmount,
-		Status:        "success",
-		TransactionID: transactionID,
-		CreatedAt:     time.Now(),
-	}
-	if err := db.Create(&payment).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось обработать платеж"})
-		return
-	}
-	var notiTeacher Notification
-	notiTeacher.UserID = course.TeacherID
-	notiTeacher.Type = "payment"
-	notiTeacher.RelatedID = payment.ID
-	notiTeacher.Content = fmt.Sprintf("Клиент оплатил курс %s: %s RUB", course.Title, netAmount.String())
-	notiTeacher.Read = false
-	notiTeacher.CreatedAt = time.Now()
-	db.Create(&notiTeacher)
-	jsonNotiTeacher, _ := json.Marshal(notiTeacher)
-	sendToUser(course.TeacherID, []byte(`{"type":"notification","data":`+string(jsonNotiTeacher)+`}`))
-	var notiClient Notification
-	notiClient.UserID = input.UserID
-	notiClient.Type = "payment"
-	notiClient.RelatedID = payment.ID
-	notiClient.Content = "Оплата за курс " + course.Title + " успешна"
-	notiClient.Read = false
-	notiClient.CreatedAt = time.Now()
-	db.Create(&notiClient)
-	jsonNotiClient, _ := json.Marshal(notiClient)
-	sendToUser(input.UserID, []byte(`{"type":"notification","data":`+string(jsonNotiClient)+`}`))
-	c.JSON(http.StatusOK, gin.H{"transaction_id": transactionID, "status": "success"})
-}
-
-func getPayments(c *gin.Context) {
-	userID := c.GetInt("user_id")
-	var payments []Payment
-	if userID == 0 {
-		c.JSON(http.StatusOK, []Payment{})
-		return
-	}
-	db.Where("user_id = ? AND status = 'success'", userID).Find(&payments)
-	c.JSON(http.StatusOK, payments)
-}
-
-func getEnrolledCourses(c *gin.Context) {
-	userID := c.GetInt("user_id")
-	var payments []Payment
-	db.Where("user_id = ? AND status = 'success'", userID).Find(&payments)
-	courseIDs := []int{}
-	for _, p := range payments {
-		courseIDs = append(courseIDs, p.CourseID)
-	}
-	var courses []Course
-	db.Preload("Teacher").Where("id IN ?", courseIDs).Find(&courses)
-	for i := range courses {
-		courses[i].Teacher.Password = ""
-	}
-	c.JSON(http.StatusOK, courses)
-}
-
-func sendMessage(c *gin.Context) {
-	var msg Message
-	if err := c.ShouldBindJSON(&msg); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	senderID := c.GetInt("user_id")
-	if senderID == msg.ReceiverID {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Нельзя отправить сообщение себе"})
-		return
-	}
-	var receiver User
-	if err := db.First(&receiver, msg.ReceiverID).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Получатель не существует"})
-		return
-	}
-	senderRole := c.GetString("role")
-	if !((senderRole == "client" && receiver.Role == "nutri") || (senderRole == "nutri" && receiver.Role == "client")) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Разрешена коммуникация только между клиентами и нутрициологами"})
-		return
-	}
-	msg.SenderID = senderID
-	msg.Read = false
-	msg.CreatedAt = time.Now()
-	if err := db.Create(&msg).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось отправить сообщение"})
-		return
-	}
-	var sender User
-	db.First(&sender, msg.SenderID)
-	var noti Notification
-	noti.UserID = msg.ReceiverID
-	noti.Type = "message"
-	noti.RelatedID = msg.SenderID
-	noti.Content = "Новое сообщение от " + sender.FullName
-	noti.Read = false
-	noti.CreatedAt = time.Now()
-	db.Create(&noti)
-	jsonMsg, _ := json.Marshal(msg)
-	sendToUser(msg.ReceiverID, []byte(`{"type":"message","data":`+string(jsonMsg)+`}`))
-	sendToUser(msg.SenderID, []byte(`{"type":"message","data":`+string(jsonMsg)+`}`))
-	jsonNoti, _ := json.Marshal(noti)
-	sendToUser(msg.ReceiverID, []byte(`{"type":"notification","data":`+string(jsonNoti)+`}`))
-	c.JSON(http.StatusCreated, msg)
-}
-
-func getMessages(c *gin.Context) {
-	receiverIDStr := c.Query("receiver_id")
-	receiverID, err := strconv.Atoi(receiverIDStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID получателя"})
-		return
-	}
-	userID := c.GetInt("user_id")
-	var messages []Message
-	db.Where("(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)", userID, receiverID, receiverID, userID).
-		Order("created_at ASC").
-		Find(&messages)
-	c.JSON(http.StatusOK, messages)
-}
-
-func markMessagesRead(c *gin.Context) {
-	var input struct {
-		ReceiverID int `json:"receiver_id"`
-	}
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	userID := c.GetInt("user_id")
-	if err := db.Model(&Message{}).Where("sender_id = ? AND receiver_id = ? AND read = false", input.ReceiverID, userID).Update("read", true).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка отметки прочитанных"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "Сообщения отмечены как прочитанные"})
-}
-
-func getNotifications(c *gin.Context) {
-	userID := c.GetInt("user_id")
-	var notifications []Notification
-	db.Where("user_id = ?", userID).Order("created_at DESC").Find(&notifications)
-	c.JSON(http.StatusOK, notifications)
-}
-
-func markNotificationRead(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
-		return
-	}
-	userID := c.GetInt("user_id")
-	if err := db.Model(&Notification{}).Where("id = ? AND user_id = ?", id, userID).Update("read", true).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Уведомление не найдено"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "Уведомление отмечено как прочитанное"})
-}
-
 func createReview(c *gin.Context) {
-	var review Review
-	if err := c.ShouldBindJSON(&review); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	userID := c.GetInt("userID")
+	var input struct {
+		CourseID int    `json:"course_id"`
+		Content  string `json:"content"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
-	var course Course
-	if err := db.First(&course, review.CourseID).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Курс не найден"})
+	var enrollment Enrollment
+	if err := db.Where("user_id = ? AND course_id = ?", userID, input.CourseID).First(&enrollment).Error; err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Отзыв только после оплаты"})
 		return
 	}
-	review.ReviewedUserID = course.TeacherID
-	review.AuthorID = c.GetInt("user_id")
-	review.CreatedAt = time.Now()
+	review := Review{
+		CourseID: input.CourseID,
+		AuthorID: userID,
+		Content:  input.Content,
+	}
 	if err := db.Create(&review).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось создать отзыв"})
+		log.Printf("Ошибка создания отзыва: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания отзыва"})
 		return
 	}
-	c.JSON(http.StatusCreated, review)
+	c.JSON(http.StatusOK, review)
 }
 
-func getReviewsByUser(c *gin.Context) {
-	userID, err := strconv.Atoi(c.Param("user_id"))
+func getCourseReviews(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID курса"})
 		return
 	}
 	var reviews []Review
-	db.Where("reviewed_user_id = ?", userID).Find(&reviews)
+	db.Preload("Author").Where("course_id = ?", id).Find(&reviews)
 	c.JSON(http.StatusOK, reviews)
 }
 
-func getReviewsByCourse(c *gin.Context) {
-	courseID, err := strconv.Atoi(c.Param("course_id"))
+func getUserReviews(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID пользователя"})
 		return
 	}
 	var reviews []Review
-	db.Where("course_id = ?", courseID).Find(&reviews)
+	db.Preload("Author").Where("author_id = ?", id).Find(&reviews)
 	c.JSON(http.StatusOK, reviews)
-}
-
-func getNutris(c *gin.Context) {
-	limitStr := c.Query("limit")
-	limit, err := strconv.Atoi(limitStr)
-	if err != nil || limit <= 0 {
-		limit = 6
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	var users []User
-	if err := db.Where("role = ?", "nutri").Limit(limit).Find(&users).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка загрузки нутрициологов"})
-		return
-	}
-	for i := range users {
-		users[i].Password = ""
-	}
-	c.JSON(http.StatusOK, users)
 }
 
 func getRandomReviews(c *gin.Context) {
 	var reviews []Review
-	db.Order("RANDOM()").Limit(3).Find(&reviews)
+	db.Preload("Author").Order("RANDOM()").Limit(3).Find(&reviews)
 	c.JSON(http.StatusOK, reviews)
+}
+
+func getEnrolled(c *gin.Context) {
+	userID := c.GetInt("userID")
+	var enrollments []Enrollment
+	db.Where("user_id = ?", userID).Find(&enrollments)
+	var response []struct {
+		ID        int       `json:"id"`
+		UserID    int       `json:"user_id"`
+		CourseID  int       `json:"course_id"`
+		CreatedAt time.Time `json:"created_at"`
+		Course    Course    `json:"course"`
+	}
+	for _, e := range enrollments {
+		var course Course
+		if err := db.Preload("Teacher").First(&course, e.CourseID).Error; err != nil {
+			log.Printf("Курс не найден для enrollment %d: %v", e.ID, err)
+			continue
+		}
+		response = append(response, struct {
+			ID        int       `json:"id"`
+			UserID    int       `json:"user_id"`
+			CourseID  int       `json:"course_id"`
+			CreatedAt time.Time `json:"created_at"`
+			Course    Course    `json:"course"`
+		}{
+			ID:        e.ID,
+			UserID:    e.UserID,
+			CourseID:  e.CourseID,
+			CreatedAt: e.CreatedAt,
+			Course:    course,
+		})
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func createPayment(c *gin.Context) {
+	userID := c.GetInt("userID")
+	var input struct {
+		CourseID int `json:"course_id"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
+		return
+	}
+	var course Course
+	if err := db.First(&course, input.CourseID).Error; err != nil {
+		log.Printf("Курс не найден: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Курс не найден"})
+		return
+	}
+	netAmount := course.NetPrice
+	grossAmount := course.GrossPrice
+	commission := grossAmount.Sub(netAmount)
+
+	shopID := os.Getenv("SHOP_ID")
+	secretKey := os.Getenv("SECRET_KEY")
+	if shopID == "" || secretKey == "" {
+		log.Printf("Ошибка: SHOP_ID или SECRET_KEY не установлены")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка конфигурации платежей"})
+		return
+	}
+
+	yookassaID, confirmationURL, err := createYookassaPayment(grossAmount.StringFixed(2))
+	if err != nil {
+		log.Printf("Ошибка создания платежа ЮKassa: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
+		return
+	}
+
+	payment := Payment{
+		UserID:        userID,
+		CourseID:      input.CourseID,
+		GrossAmount:   grossAmount,
+		Commission:    commission,
+		NetAmount:     netAmount,
+		Status:        "pending",
+		YookassaID:    yookassaID,
+		TransactionID: yookassaID,
+	}
+	if err := db.Create(&payment).Error; err != nil {
+		log.Printf("Ошибка сохранения платежа: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сохранения платежа"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"confirmation_url": confirmationURL, "payment_id": payment.ID})
+}
+
+func createYookassaPayment(amount string) (string, string, error) {
+	shopID := os.Getenv("SHOP_ID")
+	secretKey := os.Getenv("SECRET_KEY")
+	returnURL := "http://localhost:3000/return"
+
+	body := map[string]interface{}{
+		"amount": map[string]string{
+			"value":    amount,
+			"currency": "RUB",
+		},
+		"confirmation": map[string]string{
+			"type":       "redirect",
+			"return_url": returnURL,
+		},
+		"capture":     true,
+		"description": "Оплата курса",
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", "", fmt.Errorf("ошибка сериализации JSON: %v", err)
+	}
+	req, err := http.NewRequest("POST", "https://sandbox.yookassa.ru/v3/payments", strings.NewReader(string(jsonBody)))
+	if err != nil {
+		return "", "", fmt.Errorf("ошибка создания запроса: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotence-Key", fmt.Sprintf("%d", time.Now().UnixNano()))
+	req.SetBasicAuth(shopID, secretKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("ошибка выполнения запроса: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", "", fmt.Errorf("ошибка декодирования ответа: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("ошибка ЮKassa: %v", result["error"])
+	}
+	yookassaID, ok := result["id"].(string)
+	if !ok {
+		return "", "", fmt.Errorf("ошибка: неверный формат ID платежа")
+	}
+	confirmation, ok := result["confirmation"].(map[string]interface{})
+	if !ok {
+		return "", "", fmt.Errorf("ошибка: неверный формат confirmation")
+	}
+	confirmationURL, ok := confirmation["confirmation_url"].(string)
+	if !ok {
+		return "", "", fmt.Errorf("ошибка: неверный формат confirmation_url")
+	}
+	return yookassaID, confirmationURL, nil
+}
+
+func getPaymentReturn(c *gin.Context) {
+	paymentID, err := strconv.Atoi(c.Query("payment_id"))
+	if err != nil {
+		log.Printf("Неверный ID платежа: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID платежа"})
+		return
+	}
+	var payment Payment
+	if err := db.First(&payment, paymentID).Error; err != nil {
+		log.Printf("Платеж не найден: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Платеж не найден"})
+		return
+	}
+	message := "Ошибка оплаты"
+	if payment.Status == "paid" {
+		message = "Оплата успешна"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status":         payment.Status,
+		"message":        message,
+		"transaction_id": payment.TransactionID,
+	})
+}
+
+func webhookHandler(c *gin.Context) {
+	secretKey := os.Getenv("SECRET_KEY")
+	if secretKey == "" {
+		log.Printf("Ошибка: SECRET_KEY не установлен")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка конфигурации"})
+		return
+	}
+	signature := c.GetHeader("Content-Signature")
+	if signature == "" {
+		log.Printf("Ошибка: Подпись не предоставлена")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Подпись не предоставлена"})
+		return
+	}
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		log.Printf("Ошибка чтения тела запроса: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка чтения тела запроса"})
+		return
+	}
+	h := hmac.New(sha256.New, []byte(secretKey))
+	h.Write(body)
+	expected := "sha256=" + hex.EncodeToString(h.Sum(nil))
+	if signature != expected {
+		log.Printf("Неверная подпись webhook: %s != %s", signature, expected)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверная подпись"})
+		return
+	}
+	var notification map[string]interface{}
+	if err := json.Unmarshal(body, &notification); err != nil {
+		log.Printf("Ошибка разбора уведомления: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный формат уведомления"})
+		return
+	}
+	event, ok := notification["event"].(string)
+	if !ok {
+		log.Printf("Ошибка: Неверный формат события")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный формат события"})
+		return
+	}
+	if event == "payment.succeeded" {
+		object, ok := notification["object"].(map[string]interface{})
+		if !ok {
+			log.Printf("Ошибка: Неверный формат объекта")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный формат объекта"})
+			return
+		}
+		yookassaID, ok := object["id"].(string)
+		if !ok {
+			log.Printf("Ошибка: Неверный формат ID платежа")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный формат ID платежа"})
+			return
+		}
+		var payment Payment
+		if err := db.Where("yookassa_id = ?", yookassaID).First(&payment).Error; err != nil {
+			log.Printf("Платеж не найден: %s", yookassaID)
+			c.Status(http.StatusOK)
+			return
+		}
+		payment.Status = "paid"
+		payment.TransactionID = yookassaID
+		if err := db.Save(&payment).Error; err != nil {
+			log.Printf("Ошибка обновления статуса: %v", err)
+			c.Status(http.StatusOK)
+			return
+		}
+		var course Course
+		if err := db.First(&course, payment.CourseID).Error; err != nil {
+			log.Printf("Курс не найден: %d", payment.CourseID)
+			c.Status(http.StatusOK)
+			return
+		}
+		if err := db.Model(&User{}).Where("id = ?", course.TeacherID).Update("balance", gorm.Expr("balance + ?", payment.NetAmount)).Error; err != nil {
+			log.Printf("Ошибка обновления баланса: %v", err)
+			c.Status(http.StatusOK)
+			return
+		}
+		enrollment := Enrollment{UserID: payment.UserID, CourseID: payment.CourseID}
+		if err := db.Create(&enrollment).Error; err != nil {
+			log.Printf("Ошибка создания записи о зачислении: %v", err)
+			c.Status(http.StatusOK)
+			return
+		}
+	}
+	c.Status(http.StatusOK)
 }
 
 func startChat(c *gin.Context) {
 	var input struct {
 		ReceiverID int `json:"receiver_id"`
 	}
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	userID := c.GetInt("user_id")
-	if userID == input.ReceiverID {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Нельзя начать чат с собой"})
+	if err := c.BindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	var receiver User
 	if err := db.First(&receiver, input.ReceiverID).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Пользователь не найден"})
+		log.Printf("Получатель не найден: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Получатель не найден"})
 		return
 	}
-	if c.GetString("role") != "client" || receiver.Role != "nutri" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Только клиенты могут начинать чат с нутрициологами"})
+	if input.ReceiverID == c.GetInt("userID") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Нельзя начать чат с самим собой"})
 		return
-	}
-	var existing Message
-	if db.Where("(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)", userID, input.ReceiverID, input.ReceiverID, userID).First(&existing).Error != nil {
-		newMessage := Message{
-			SenderID:   userID,
-			ReceiverID: input.ReceiverID,
-			Content:    "Начните диалог прямо сейчас!",
-			Read:       false,
-			CreatedAt:  time.Now(),
-		}
-		if err := db.Create(&newMessage).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Не удалось начать чат"})
-			return
-		}
-		jsonMsg, _ := json.Marshal(newMessage)
-		sendToUser(input.ReceiverID, []byte(`{"type":"message","data":`+string(jsonMsg)+`}`))
-		sendToUser(userID, []byte(`{"type":"message","data":`+string(jsonMsg)+`}`))
-		var sender User
-		db.First(&sender, userID)
-		var noti Notification
-		noti.UserID = input.ReceiverID
-		noti.Type = "message"
-		noti.RelatedID = userID
-		noti.Content = "Новый чат начат пользователем " + sender.FullName
-		noti.Read = false
-		noti.CreatedAt = time.Now()
-		db.Create(&noti)
-		jsonNoti, _ := json.Marshal(noti)
-		sendToUser(input.ReceiverID, []byte(`{"type":"notification","data":`+string(jsonNoti)+`}`))
 	}
 	c.JSON(http.StatusOK, gin.H{"receiver_id": input.ReceiverID})
 }
 
 func getChats(c *gin.Context) {
-	userID := c.GetInt("user_id")
-	var dialogs []Dialog
-	err := db.Raw(`
-SELECT u.id AS user_id, u.full_name, u.avatar_url,
- (SELECT content FROM messages m2 WHERE (m2.sender_id = u.id AND m2.receiver_id = ?) OR (m2.receiver_id = u.id AND m2.sender_id = ?) ORDER BY m2.created_at DESC LIMIT 1) AS last_message,
- (SELECT COUNT(*) FROM messages m3 WHERE m3.sender_id = u.id AND m3.receiver_id = ? AND m3.read = false) AS unread_count
-FROM users u
-WHERE u.id != ? AND EXISTS (SELECT 1 FROM messages m1 WHERE (m1.sender_id = u.id AND m1.receiver_id = ?) OR (m1.receiver_id = u.id AND m1.sender_id = ?))
-`, userID, userID, userID, userID, userID, userID).Scan(&dialogs).Error
+	userID := c.GetInt("userID")
+	var dialogs []struct {
+		UserID      int    `json:"user_id"`
+		FullName    string `json:"full_name"`
+		AvatarURL   string `json:"avatar_url"`
+		LastMessage string `json:"last_message"`
+		UnreadCount int    `json:"unread_count"`
+	}
+	db.Raw(`
+		SELECT DISTINCT ON (u.id) u.id AS user_id, u.full_name, u.avatar_url, m.content AS last_message,
+		COUNT(CASE WHEN m.read_at IS NULL AND m.receiver_id = ? THEN 1 END) AS unread_count
+		FROM users u
+		JOIN messages m ON (m.sender_id = u.id AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = u.id)
+		WHERE u.id != ?
+		GROUP BY u.id, m.content
+		ORDER BY u.id, m.created_at DESC
+	`, userID, userID, userID, userID).Scan(&dialogs)
+	c.JSON(http.StatusOK, dialogs)
+}
+
+func getMessages(c *gin.Context) {
+	userID := c.GetInt("userID")
+	receiverID, err := strconv.Atoi(c.Query("receiver_id"))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка загрузки чатов"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID получателя"})
 		return
 	}
-	c.JSON(http.StatusOK, dialogs)
+	var messages []Message
+	db.Where("(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)", userID, receiverID, receiverID, userID).
+		Order("created_at ASC").Find(&messages)
+	c.JSON(http.StatusOK, messages)
+}
+
+func sendMessage(c *gin.Context) {
+	userID := c.GetInt("userID")
+	var input struct {
+		ReceiverID int    `json:"receiver_id"`
+		Content    string `json:"content"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
+		return
+	}
+	if len(input.Content) > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Сообщение слишком длинное"})
+		return
+	}
+	var receiver User
+	if err := db.First(&receiver, input.ReceiverID).Error; err != nil {
+		log.Printf("Получатель не найден: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Получатель не найден"})
+		return
+	}
+	message := Message{
+		SenderID:   userID,
+		ReceiverID: input.ReceiverID,
+		Content:    input.Content,
+	}
+	if err := db.Create(&message).Error; err != nil {
+		log.Printf("Ошибка отправки сообщения: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка отправки"})
+		return
+	}
+	jsonMsg, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("Ошибка сериализации сообщения: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сериализации сообщения"})
+		return
+	}
+	sendToUser(input.ReceiverID, jsonMsg)
+	sendToUser(userID, jsonMsg)
+	c.JSON(http.StatusOK, message)
+}
+
+func markRead(c *gin.Context) {
+	userID := c.GetInt("userID")
+	var input struct {
+		ReceiverID int `json:"receiver_id"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
+		return
+	}
+	if err := db.Model(&Message{}).Where("sender_id = ? AND receiver_id = ? AND read_at IS NULL", input.ReceiverID, userID).
+		Update("read_at", time.Now()).Error; err != nil {
+		log.Printf("Ошибка отметки прочитанных: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка отметки прочитанных"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Сообщения отмечены прочитанными"})
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
