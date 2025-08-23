@@ -5,12 +5,12 @@
         <v-card class="pa-6" aria-label="Результат оплаты">
           <v-card-title class="justify-center text-h4" aria-label="Результат оплаты">
             Результат оплаты
-          </v-card-title> <!-- ИЗМЕНЕНО: h4 по ТЗ -->
+          </v-card-title>
           <v-card-text>
-            <p :style="{ color: status === 'succeeded' ? '#28A745' : '#DC3545' }" aria-label="Сообщение"> <!-- ИЗМЕНЕНО: Зеленый/красный по ТЗ -->
+            <p :style="{ color: status === 'succeeded' ? '#28A745' : '#DC3545' }" aria-label="Сообщение">
               {{ message }}
             </p>
-            <p v-if="transactionId" aria-label="ID транзакции">ID: {{ transactionId }}</p> <!-- ИЗМЕНЕНО: Показ ID по ТЗ -->
+            <p v-if="transactionId" aria-label="ID транзакции">ID: {{ transactionId }}</p>
             <v-btn color="#28A745" @click="goToProfile" aria-label="Перейти в профиль">Перейти в профиль</v-btn>
           </v-card-text>
         </v-card>
@@ -29,7 +29,7 @@ const route = useRoute()
 const router = useRouter()
 const status = ref('')
 const message = ref('')
-const transactionId = ref(null) // ИЗМЕНЕНО: Для показа ID
+const transactionId = ref(null)
 
 onMounted(async () => {
   const paymentId = route.query.payment_id
@@ -43,8 +43,8 @@ onMounted(async () => {
     const response = await $fetch(`${config.public.apiBase}/api/payments/return?payment_id=${paymentId}`, { headers })
     status.value = response.status
     message.value = response.message
-    transactionId.value = response.transaction_id || null // ИЗМЕНЕНО: Получаем ID если есть
-    if (status.value === 'succeeded') { // ИЗМЕНЕНО: Авто-редирект после 2 сек по ТЗ
+    transactionId.value = response.transaction_id || null
+    if (status.value === 'succeeded') {
       setTimeout(() => router.push('/profile'), 2000)
     }
   } catch (error) {

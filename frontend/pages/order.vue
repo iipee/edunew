@@ -13,7 +13,7 @@
             <v-list v-if="courses.length > 0" aria-label="Список доступных курсов">
               <v-list-item v-for="(course, index) in courses" :key="index" aria-label="Курс">
                 <v-list-item-content>
-                  <v-list-item-title aria-label="Название курса">{{ course.title }} - <span style="font-size:20px;color:#28A745;font-weight:bold;">{{ course.gross_price }} руб.</span></v-list-item-title> <!-- ИЗМЕНЕНО: gross_price зеленый жирный по ТЗ -->
+                  <v-list-item-title aria-label="Название курса">{{ course.title }} - <span style="font-size:20px;color:#28A745;font-weight:bold;">{{ course.gross_price }} руб.</span></v-list-item-title>
                   <v-list-item-subtitle aria-label="Описание курса">{{ course.description }}</v-list-item-subtitle>
                 </v-list-item-content>
                 <v-list-item-action>
@@ -22,7 +22,7 @@
                     @click="orderCourse(course)" 
                     v-tooltip="'Записаться'" 
                     aria-label="Записаться на курс"
-                  > <!-- ИЗМЕНЕНО: color по ТЗ -->
+                  >
                     Записаться
                   </v-btn>
                 </v-list-item-action>
@@ -59,7 +59,7 @@ onMounted(async () => {
   }
   if (!token.value) {
     errorMessage.value = 'Требуется авторизация'
-    router.push('/login') // ИЗМЕНЕНО: Redirect если не логирован
+    router.push('/login')
     return
   }
   const headers = { Authorization: `Bearer ${token.value}` }

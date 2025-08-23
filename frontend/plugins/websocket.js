@@ -11,13 +11,18 @@ export default defineNuxtPlugin((nuxtApp) => {
   const connectWebSocket = () => {
     if (!process.client) return
     const token = localStorage.getItem('token')
-    if (!token) return
+    if (!token) {
+      console.log('WebSocket: Токен отсутствует, подключение отменено')
+      return
+    }
     const config = nuxtApp.$config.public
     try {
+      console.log('Attempting WebSocket connection with token:', token) // Дебаг-лог
       ws = new WebSocket(`${config.wsBase}/ws?token=${token}`)
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
+          console.log('WebSocket message received:', data) // Дебаг-лог
           if (data.type === 'message') {
             chatStore.handleNewMessage(data.data)
             nuxtApp.$emitter.emit('message', data.data)
@@ -35,9 +40,11 @@ export default defineNuxtPlugin((nuxtApp) => {
         console.log('WebSocket connected')
       }
       ws.onclose = () => {
+        console.log('WebSocket closed, attempting reconnect...')
         if (reconnectAttempts < maxReconnectAttempts) {
           setTimeout(() => {
             reconnectAttempts++
+            console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts}`)
             connectWebSocket()
           }, reconnectDelay * Math.pow(2, reconnectAttempts))
         }
@@ -52,6 +59,7 @@ export default defineNuxtPlugin((nuxtApp) => {
 
   const disconnectWebSocket = () => {
     if (ws) {
+      console.log('Disconnecting WebSocket') // Дебаг-лог
       ws.close()
       ws = null
       reconnectAttempts = 0

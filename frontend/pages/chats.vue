@@ -7,7 +7,7 @@
             <h2 aria-label="Чаты">Чаты</h2>
           </v-card-title>
           <v-card-text>
-            <v-list aria-label="Список диалогов">
+            <v-list aria-label="Список диалогов" v-if="chatStore.dialogs.length">
               <v-list-item 
                 v-for="dialog in chatStore.dialogs" 
                 :key="dialog.user_id" 
@@ -25,12 +25,12 @@
                   </v-list-item-title>
                 </v-list-item-content>
               </v-list-item>
-              <v-list-item v-if="!chatStore.dialogs.length" aria-label="Нет диалогов">
-                <v-list-item-content>
-                  <v-list-item-title>Нет диалогов. Начните новый чат!</v-list-item-title>
-                </v-list-item-content>
-              </v-list-item>
             </v-list>
+            <v-list-item v-else aria-label="Нет диалогов">
+              <v-list-item-content>
+                <v-list-item-title>Нет диалогов. Начните новый чат!</v-list-item-title>
+              </v-list-item-content>
+            </v-list-item>
           </v-card-text>
         </v-card>
       </v-col>
@@ -50,46 +50,28 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useAuthStore } from '~/stores/auth'
 import { useChatStore } from '~/stores/chat'
 import { useNuxtApp } from 'nuxt/app'
-import ChatWindow from '~/components/ChatWindow.vue'
 
 const { $emitter } = useNuxtApp()
+const chatStore = useChatStore()
 const route = useRoute()
 const router = useRouter()
-const authStore = useAuthStore()
-const chatStore = useChatStore()
 const selectedId = ref(null)
 const snackbar = ref(false)
 const errorMessage = ref('')
 
 onMounted(async () => {
-  authStore.initialize()
-  if (!authStore.isLoggedIn) {
-    errorMessage.value = 'Требуется авторизация'
-    snackbar.value = true
-    router.push('/login')
-    return
-  }
   await loadDialogs()
-  if (route.query.selected) {
-    selectedId.value = parseInt(route.query.selected)
-    if (selectedId.value) {
-      await selectDialog(selectedId.value)
-    }
-  }
   $emitter.on('message', () => loadDialogs())
   $emitter.on('chat:started', () => loadDialogs())
 })
 
 watch(() => route.query.selected, async (newId) => {
-  if (newId) {
+  if (newId && parseInt(newId) !== selectedId.value) {
     selectedId.value = parseInt(newId)
-    if (selectedId.value) {
-      await selectDialog(selectedId.value)
-    }
-  } else {
+    await selectDialog(selectedId.value)
+  } else if (!newId) {
     selectedId.value = null
   }
 })
@@ -103,6 +85,7 @@ onUnmounted(() => {
 const loadDialogs = async () => {
   try {
     await chatStore.fetchDialogs()
+    console.log('Dialogs loaded:', chatStore.dialogs)
   } catch (error) {
     errorMessage.value = `Ошибка загрузки диалогов: ${error.message || 'Неизвестная ошибка'}`
     snackbar.value = true
@@ -110,6 +93,9 @@ const loadDialogs = async () => {
 }
 
 const selectDialog = async (id) => {
+  if (!id) return
+  if (id === selectedId.value) return
+  console.log('Selecting dialog with id:', id)
   selectedId.value = id
   router.replace({ query: { selected: id } })
   try {
@@ -132,11 +118,11 @@ const selectDialog = async (id) => {
 .dialog-item {
   border-radius: 6px;
   margin: 1px 0;
-  padding: 1px 4px; /* Сохранена ширина, уменьшена высота */
+  padding: 1px 4px;
   transition: background-color 0.2s;
   display: flex;
   align-items: center;
-  min-height: 16px; /* В два раза меньше по высоте */
+  min-height: 16px;
 }
 .dialog-item:hover {
   background-color: #f5f5f5;
@@ -150,12 +136,12 @@ const selectDialog = async (id) => {
 }
 .avatar {
   margin-right: 4px;
-  width: 16px; /* Уменьшенный размер аватарки */
+  width: 16px;
   height: 16px;
 }
 .avatar-img {
   object-fit: cover;
-  border-radius: 50%; /* Закругленные аватарки */
+  border-radius: 50%;
 }
 .v-list-item-content {
   display: flex;
@@ -163,7 +149,7 @@ const selectDialog = async (id) => {
   min-width: 0;
 }
 .v-list-item-title {
-  font-size: 10px; /* Еще меньший шрифт */
+  font-size: 10px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -178,7 +164,7 @@ const selectDialog = async (id) => {
     padding-top: 8px;
   }
   .dialog-item {
-    padding: 1px 3px; /* Меньшие отступы для мобильных */
+    padding: 1px 3px;
   }
 }
 </style>
