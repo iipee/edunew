@@ -73,7 +73,7 @@ const userId = ref(parseInt(localStorage.getItem('userId')))
 const receiverFullName = ref('')
 
 onMounted(() => {
-  console.log('ChatWindow mounted, receiverId:', props.receiverId, 'input field should be visible')
+  console.log('ChatWindow mounted, receiverId:', props.receiverId, 'messages:', messages.value)
   loadMessages()
   $emitter.on('message', handleNewMessage)
   $emitter.on('chat:started', handleChatStarted)
@@ -82,6 +82,7 @@ onMounted(() => {
 
 watch(() => chatStore.messages, () => {
   messages.value = chatStore.messages
+  console.log('Messages updated:', messages.value)
   nextTick(() => scrollToBottom())
 }, { deep: true })
 
@@ -121,8 +122,11 @@ const sendMessage = async () => {
 
 const handleNewMessage = (msg) => {
   if (msg.sender_id === props.receiverId || msg.receiver_id === props.receiverId) {
-    messages.value = chatStore.messages
-    nextTick(() => scrollToBottom())
+    // Проверяем, нет ли уже этого сообщения
+    if (!messages.value.some(m => m.id === msg.id)) {
+      messages.value = [...chatStore.messages]
+      nextTick(() => scrollToBottom())
+    }
   }
 }
 
@@ -198,6 +202,6 @@ const formatDate = (timestamp) => {
   background-color: #ffffff;
   min-height: 40px;
   width: 100%;
-  min-width: 200px; /* Добавлено для видимости */
+  min-width: 200px;
 }
 </style>

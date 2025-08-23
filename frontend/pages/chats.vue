@@ -48,7 +48,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useChatStore } from '~/stores/chat'
 import { useNuxtApp } from 'nuxt/app'
@@ -63,12 +63,18 @@ const errorMessage = ref('')
 
 onMounted(async () => {
   await loadDialogs()
-  $emitter.on('message', () => loadDialogs())
-  $emitter.on('chat:started', () => loadDialogs())
+  if (route.query.selected) {
+    console.log('Auto-selecting dialog from query:', route.query.selected)
+    selectedId.value = parseInt(route.query.selected)
+    await selectDialog(selectedId.value)
+  }
+  $emitter.on('message', handleNewMessage)
+  $emitter.on('chat:started', handleChatStarted)
 })
 
 watch(() => route.query.selected, async (newId) => {
   if (newId && parseInt(newId) !== selectedId.value) {
+    console.log('Watch: selecting dialog from query:', newId)
     selectedId.value = parseInt(newId)
     await selectDialog(selectedId.value)
   } else if (!newId) {
@@ -100,9 +106,21 @@ const selectDialog = async (id) => {
   router.replace({ query: { selected: id } })
   try {
     await chatStore.fetchMessages(id)
+    await nextTick()
   } catch (error) {
     errorMessage.value = `Ошибка загрузки сообщений: ${error.message || 'Неизвестная ошибка'}`
     snackbar.value = true
+  }
+}
+
+const handleNewMessage = () => {
+  loadDialogs()
+}
+
+const handleChatStarted = () => {
+  loadDialogs()
+  if (route.query.selected) {
+    selectDialog(parseInt(route.query.selected))
   }
 }
 </script>

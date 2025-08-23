@@ -138,6 +138,15 @@ type Notification struct {
 	ReadAt    *time.Time `json:"read_at"`
 }
 
+type Dialog struct {
+	ID         int       `json:"id" gorm:"primaryKey"`
+	SenderID   int       `json:"sender_id"`
+	ReceiverID int       `json:"receiver_id"`
+	CreatedAt  time.Time `json:"created_at" gorm:"autoCreateTime"`
+	Sender     User      `json:"sender" gorm:"foreignKey:SenderID"`
+	Receiver   User      `json:"receiver" gorm:"foreignKey:ReceiverID"`
+}
+
 // CORS middleware
 func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -163,8 +172,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Ошибка подключения к БД: %v", err)
 	}
-	db.AutoMigrate(&User{}, &Course{}, &Enrollment{}, &Review{}, &Payment{}, &Message{}, &Notification{})
-	// Создание тестового нутрициолога, если таблица пуста
+	db.AutoMigrate(&User{}, &Course{}, &Enrollment{}, &Review{}, &Payment{}, &Message{}, &Notification{}, &Dialog{})
+	// Создание тестового нутрициолога
 	var count int64
 	db.Model(&User{}).Where("role = ?", "nutri").Count(&count)
 	if count == 0 {
@@ -187,7 +196,7 @@ func main() {
 	r = gin.Default()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
-	r.Use(corsMiddleware()) // Добавлен CORS
+	r.Use(corsMiddleware())
 	api := r.Group("/api")
 	api.POST("/register", register)
 	api.POST("/login", login)
@@ -415,12 +424,16 @@ func searchCourses(c *gin.Context) {
 	var courses []Course
 	dbQuery := db.Preload("Teacher")
 	if query != "" {
-		dbQuery = dbQuery.Where("title ILIKE ? OR description ILIKE ? OR services @> ?", "%"+query+"%", "%"+query+"%", []string{query})
+		// Формируем JSONB-массив для services
+		jsonQuery := fmt.Sprintf(`["%s"]`, query)
+		dbQuery = dbQuery.Where("title ILIKE ? OR description ILIKE ? OR services @> ?", "%"+query+"%", "%"+query+"%", jsonQuery)
 	}
 	if err := dbQuery.Find(&courses).Error; err != nil {
+		log.Printf("Ошибка поиска: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка поиска"})
 		return
 	}
+	log.Printf("Найдено %d курсов для запроса '%s'", len(courses), query)
 	c.JSON(http.StatusOK, courses)
 }
 
@@ -870,31 +883,28 @@ func startChat(c *gin.Context) {
 		return
 	}
 	var count int64
-	db.Model(&Message{}).Where("(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)", userID, input.ReceiverID, input.ReceiverID, userID).Count(&count)
+	db.Model(&Dialog{}).Where("(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)", userID, input.ReceiverID, input.ReceiverID, userID).Count(&count)
 	if count == 0 {
-		message := Message{
+		dialog := Dialog{
 			SenderID:   userID,
 			ReceiverID: input.ReceiverID,
-			Content:    "Начало чата",
 		}
-		if err := db.Create(&message).Error; err != nil {
-			log.Printf("Ошибка создания стартового сообщения: %v", err)
+		if err := db.Create(&dialog).Error; err != nil {
+			log.Printf("Ошибка создания диалога: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка начала чата"})
 			return
 		}
-		// Отправляем только инициатору через WebSocket
-		db.First(&message)
-		msgJSON, err := json.Marshal(map[string]interface{}{
-			"type": "message",
-			"data": message,
-		})
-		if err != nil {
-			log.Printf("Ошибка marshal стартового сообщения: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки сообщения"})
-			return
-		}
-		sendToUser(userID, msgJSON)
-		log.Printf("Создано стартовое сообщение для диалога %d -> %d", userID, input.ReceiverID)
+		log.Printf("Создан диалог %d -> %d", userID, input.ReceiverID)
+	}
+	// Emit 'chat:started' для инициатора через WebSocket
+	chatStartedJSON, err := json.Marshal(map[string]interface{}{
+		"type": "chat:started",
+		"data": map[string]int{"receiver_id": input.ReceiverID},
+	})
+	if err != nil {
+		log.Printf("Ошибка marshal chat:started: %v", err)
+	} else {
+		sendToUser(userID, chatStartedJSON)
 	}
 	c.JSON(http.StatusOK, gin.H{"receiver_id": input.ReceiverID})
 }
@@ -910,13 +920,18 @@ func getChats(c *gin.Context) {
 	}
 	err := db.Raw(`
 		SELECT u.id as user_id, u.full_name, u.avatar_url, 
-		       (SELECT content FROM messages WHERE ((sender_id = u.id AND receiver_id = ?) OR (sender_id = ? AND receiver_id = u.id)) ORDER BY created_at DESC LIMIT 1) as last_message,
+		       (SELECT content FROM messages WHERE (sender_id = u.id AND receiver_id = ? OR sender_id = ? AND receiver_id = u.id) ORDER BY created_at DESC LIMIT 1) as last_message,
 		       (SELECT COUNT(*) FROM messages WHERE sender_id = u.id AND receiver_id = ? AND read_at IS NULL) as unread_count
 		FROM users u
-		WHERE EXISTS (SELECT 1 FROM messages WHERE (sender_id = u.id AND receiver_id = ?) OR (sender_id = ? AND receiver_id = u.id))
+		WHERE EXISTS (SELECT 1 FROM dialogs WHERE (sender_id = u.id AND receiver_id = ?) OR (sender_id = ? AND receiver_id = u.id))
 		AND u.id != ?
-		ORDER BY (SELECT max(created_at) FROM messages WHERE (sender_id = u.id AND receiver_id = ?) OR (sender_id = ? AND receiver_id = u.id)) DESC
-	`, userID, userID, userID, userID, userID, userID, userID, userID).Scan(&dialogs).Error
+		ORDER BY (
+			SELECT COALESCE(
+				(SELECT MAX(m.created_at) FROM messages m WHERE (m.sender_id = u.id AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = u.id)),
+				(SELECT d.created_at FROM dialogs d WHERE (d.sender_id = u.id AND d.receiver_id = ?) OR (d.sender_id = ? AND d.receiver_id = u.id) LIMIT 1)
+			)
+		) DESC
+	`, userID, userID, userID, userID, userID, userID, userID, userID, userID, userID).Scan(&dialogs).Error
 	if err != nil {
 		log.Printf("Ошибка получения чатов: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения чатов"})
@@ -973,8 +988,21 @@ func sendMessage(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки сообщения"})
 		return
 	}
-	sendToUser(userID, msgJSON)
-	sendToUser(input.ReceiverID, msgJSON)
+	// Отправляем только если пользователь онлайн
+	if conn, ok := clients[userID]; ok {
+		if err := conn.WriteMessage(websocket.TextMessage, msgJSON); err != nil {
+			log.Printf("Ошибка отправки WebSocket сообщения пользователю %d: %v", userID, err)
+			conn.Close()
+			delete(clients, userID)
+		}
+	}
+	if conn, ok := clients[input.ReceiverID]; ok {
+		if err := conn.WriteMessage(websocket.TextMessage, msgJSON); err != nil {
+			log.Printf("Ошибка отправки WebSocket сообщения пользователю %d: %v", input.ReceiverID, err)
+			conn.Close()
+			delete(clients, input.ReceiverID)
+		}
+	}
 	log.Printf("Отправлено сообщение от %d к %d: %s", userID, input.ReceiverID, input.Content)
 	c.JSON(http.StatusOK, message)
 }
