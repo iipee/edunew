@@ -15,160 +15,130 @@
                 <h3 style="font-size: 20px; color: #212529;" aria-label="Имя нутрициолога">{{ profile.full_name || profile.username || 'Имя не указано' }}</h3>
               </v-col>
               <v-col cols="12">
-                <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Услуги">Услуги</h4>
+                <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Описание">Описание</h4>
                 <p v-if="profile.description" style="font-size: 16px; line-height: 1.5;" aria-label="Описание">{{ profile.description }}</p>
                 <p v-else style="font-size: 16px; color: #6C757D;" aria-label="Описание не указано">Описание не указано</p>
               </v-col>
               <v-col cols="12">
-                <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Курсы">Курсы</h4>
+                <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Услуги">Услуги</h4>
                 <v-row v-if="courses.length > 0" class="mt-4">
                   <v-col v-for="course in sortedCourses" :key="course.id" cols="12" sm="6" md="4">
                     <NuxtLink :to="`/courses/${course.id}`" style="text-decoration: none; display: block;">
                       <v-card 
                         class="v-card v-theme--light v-card--density-default v-card--variant-elevated pa-4" 
                         style="border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 366px; min-height: 100px; width: 100%; display: flex; flex-direction: column;"
-                        aria-label="Карточка курса"
+                        aria-label="Карточка услуги"
                       >
                         <div class="v-row v-row--no-gutters align-center">
                           <div class="v-col">
                             <div class="v-card-title text-h6 pa-0" 
-                              style="font-size: 20px; color: #212529; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-bottom: 4px;"
-                              aria-label="Название курса"
+                              style="font-size: 20px; color: #212529; white-space: normal;"
                             >
                               {{ course.title }}
                             </div>
+                            <div class="v-card-subtitle pa-0 mt-2" style="font-size: 14px; color: #6C757D;">
+                              Услуги: {{ course.services ? course.services.join(', ') : 'Не указаны' }}
+                            </div>
+                            <div class="v-card-text pa-0 mt-2" style="font-size: 14px; color: #212529; line-height: 1.4;">
+                              {{ course.description ? course.description.substring(0, 100) + '...' : 'Описание не указано' }}
+                            </div>
+                            <div class="v-card-actions pa-0 mt-3" style="display: flex; justify-content: space-between; align-items: center;">
+                              <span style="font-size: 16px; color: #28A745; font-weight: bold;">
+                                {{ role === 'nutri' ? course.net_price + ' руб. (чистая)' : course.gross_price + ' руб.' }}
+                              </span>
+                              <!-- Удалена кнопка "Подробнее", так как карточка кликабельна -->
+                            </div>
                           </div>
-                          <div class="v-col v-col-auto">
-                            <span style="font-size: 16px; color: #28A745; font-weight: bold; padding-left: 8px;">
-                              {{ course.price }} руб.
-                            </span>
-                          </div>
-                        </div>
-                        <div class="v-card-text" 
-                          style="font-size: 16px; line-height: 1.5; color: #6C757D; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-clamp: 2;"
-                        >
-                          {{ course.description }}
                         </div>
                       </v-card>
                     </NuxtLink>
                   </v-col>
                 </v-row>
-                <p v-else style="font-size: 16px; color: #6C757D;" aria-label="Курсов нет">Курсов нет</p>
+                <p v-else style="font-size: 16px; color: #6C757D;" aria-label="Нет услуг">Нет доступных услуг</p>
               </v-col>
               <v-col cols="12">
                 <h4 style="font-size: 18px; color: #2E7D32;" aria-label="Отзывы">Отзывы</h4>
-                <v-list v-if="reviews.length > 0" aria-label="Список отзывов">
-                  <v-list-item v-for="review in reviews" :key="review.id" aria-label="Отзыв">
-                    <v-list-item-title style="font-size: 16px;" aria-label="Содержание отзыва">{{ review.content }}</v-list-item-title>
-                    <v-list-item-subtitle style="font-size: 14px; color: #6C757D;" aria-label="Автор отзыва">— Пользователь #{{ review.author_id }}</v-list-item-subtitle>
-                  </v-list-item>
-                </v-list>
-                <p v-else style="font-size: 16px; color: #6C757D;" aria-label="Отзывов нет">Отзывов нет</p>
+                <v-row v-if="reviews.length > 0" class="mt-4">
+                  <v-col v-for="(review, i) in reviews.slice(0, 3)" :key="i" cols="12">
+                    <v-card flat class="pa-3" style="border-radius: 8px; border: 1px solid #e0e0e0;">
+                      <v-card-text style="font-size: 14px; color: #212529;">
+                        "{{ review.content }}" — {{ review.author ? review.author.full_name : 'Аноним' }}
+                      </v-card-text>
+                    </v-card>
+                  </v-col>
+                </v-row>
+                <p v-else style="font-size: 16px; color: #6C757D;" aria-label="Нет отзывов">Нет отзывов</p>
               </v-col>
             </v-row>
+          </v-card-text>
+          <v-card-actions v-if="isLoggedIn && userId !== otherId" class="justify-center pa-4">
             <v-btn 
-              v-if="profile.role === 'nutri' && isLoggedIn && role === 'client'" 
               color="#28A745" 
-              block 
+              variant="outlined" 
               @click="openChat" 
-              v-tooltip="'Связаться с нутрициологом'" 
+              v-tooltip="'Открыть чат с нутрициологом'" 
               aria-label="Связаться с нутрициологом"
             >
+              <v-icon left>mdi-message-text</v-icon>
               Связаться
             </v-btn>
-          </v-card-text>
+          </v-card-actions>
         </v-card>
       </v-col>
     </v-row>
-    <v-snackbar v-model="snackbar" color="error" timeout="3000" aria-label="Уведомление об ошибке">
-      {{ errorMessage }}
-    </v-snackbar>
   </v-container>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { useRuntimeConfig } from 'nuxt/app'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useNuxtApp } from 'nuxt/app'
+import { useRuntimeConfig } from 'nuxt/app'
 
-const { $emitter } = useNuxtApp()
-const emitter = $emitter
 const config = useRuntimeConfig()
 const route = useRoute()
 const router = useRouter()
-const otherId = ref(route.params.id || null)
 const profile = ref({})
 const courses = ref([])
-const enrolled = ref([])
 const reviews = ref([])
 const token = ref(null)
 const role = ref('')
 const userId = ref(null)
-const editMode = ref(false)
+const otherId = ref(null)
+const isLoggedIn = ref(false)
 const errorMessage = ref('')
-
-const sortedCourses = computed(() => {
-  return [...courses.value].sort((a, b) => a.title.localeCompare(b.title) || a.id - b.id)
-})
-
-const isLoggedIn = computed(() => !!token.value)
+const enrolled = ref([])
 
 onMounted(async () => {
   if (process.client) {
     token.value = localStorage.getItem('token')
     role.value = localStorage.getItem('role') || ''
     userId.value = localStorage.getItem('userId') ? parseInt(localStorage.getItem('userId')) : null
+    isLoggedIn.value = !!token.value
+    otherId.value = route.params.id ? parseInt(route.params.id) : null
   }
   await loadProfile()
-  emitter.on('login', loadProfile)
 })
 
-watch(courses, () => {
-  loadProfile()
+watch(() => route.params.id, async (newId) => {
+  otherId.value = newId ? parseInt(newId) : null
+  await loadProfile()
 })
+
+const sortedCourses = computed(() => courses.value.sort((a, b) => a.title.localeCompare(b.title)))
 
 const loadProfile = async () => {
   const headers = token.value ? { Authorization: `Bearer ${token.value}` } : {}
-  const path = otherId.value ? `/api/profile/${otherId.value}` : '/api/profile'
   try {
-    const data = await $fetch(`${config.public.apiBase}${path}`, { headers })
+    const data = await $fetch(`${config.public.apiBase}/api/profile/${route.params.id}`, { headers })
     profile.value = data.profile || {}
     courses.value = data.courses || []
-    const reviewPath = otherId.value ? `/api/reviews/user/${otherId.value}` : `/api/reviews/user/${userId.value}`
-    const reviewData = await $fetch(`${config.public.apiBase}${reviewPath}`, { headers })
-    reviews.value = reviewData || []
-    if (!otherId.value && role.value === 'client') {
-      const enrolledData = await $fetch(`${config.public.apiBase}/api/enrolled`, { headers })
-      enrolled.value = enrolledData || []
+    reviews.value = data.reviews || []
+    if (isLoggedIn.value && role.value === 'client') {
+      const enrollData = await $fetch(`${config.public.apiBase}/api/enrolled`, { headers })
+      enrolled.value = enrollData || []
     }
   } catch (error) {
-    errorMessage.value = 'Ошибка загрузки профиля: ' + (error.message || 'Неизвестная ошибка')
-    if (error.statusCode === 401) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('role')
-      localStorage.removeItem('userId')
-      router.push('/login')
-    }
-  }
-}
-
-const updateProfile = async () => {
-  const headers = { Authorization: `Bearer ${token.value}` }
-  const body = {
-    full_name: profile.value.full_name,
-    description: profile.value.description
-  }
-  try {
-    await $fetch(`${config.public.apiBase}/api/profile`, { 
-      method: 'PUT', 
-      headers, 
-      body 
-    })
-    editMode.value = false
-    await loadProfile()
-  } catch (error) {
-    errorMessage.value = 'Ошибка обновления профиля: ' + (error.message || 'Неизвестная ошибка')
+    errorMessage.value = 'Ошибка загрузки профиля: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
   }
 }
 
@@ -182,11 +152,11 @@ const openChat = async () => {
     const data = await $fetch(`${config.public.apiBase}/api/start-chat`, {
       method: 'POST',
       headers,
-      body: { receiver_id: profile.value.id }
+      body: { receiver_id: otherId.value }
     })
     router.push(`/chats?selected=${data.receiver_id}`)
   } catch (error) {
-    errorMessage.value = 'Ошибка открытия чата: ' + (error.message || 'Неизвестная ошибка')
+    errorMessage.value = 'Ошибка открытия чата: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
   }
 }
 </script>

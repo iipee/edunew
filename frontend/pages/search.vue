@@ -4,12 +4,12 @@
       <v-col cols="12">
         <v-text-field
           v-model="searchQuery"
-          label="Поиск курсов или услуг"
+          label="Поиск услуг"
           prepend-icon="mdi-magnify"
           clearable
           :style="searchFieldStyle"
           @input="debouncedSearch"
-          aria-label="Поле для поиска курсов или услуг"
+          aria-label="Поле для поиска услуг"
         />
       </v-col>
     </v-row>
@@ -23,12 +23,12 @@
           height="450" 
           style="width: 320px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); background-color: #FFFFFF;"
           elevation="2"
-          aria-label="Карточка курса"
+          aria-label="Карточка услуги"
         >
-          <v-card-title class="text-h6" style="font-size: 20px; color: #212529;" aria-label="Название курса">
+          <v-card-title class="text-h6" style="font-size: 20px; color: #212529;" aria-label="Название услуги">
             {{ course.title }}
           </v-card-title>
-          <v-card-subtitle style="font-size: 16px; color: #212529;" aria-label="Автор курса">
+          <v-card-subtitle style="font-size: 16px; color: #212529;" aria-label="Автор услуги">
             Автор: 
             <NuxtLink 
               :to="`/nutri/${course.teacher.id}`" 
@@ -40,7 +40,7 @@
             </NuxtLink>
           </v-card-subtitle>
           <v-card-text style="min-height: 200px; padding: 16px 0;">
-            <div style="margin: 16px 0;" aria-label="Услуги курса">
+            <div style="margin: 16px 0;" aria-label="Услуги">
               <p v-for="(service, i) in course.services.slice(0, 3)" :key="i" style="font-size: 16px; color: #212529; margin: 4px 0;">
                 • {{ service }}
               </p>
@@ -49,45 +49,30 @@
             <p style="font-size: 16px; line-height: 1.5; color: #6C757D; margin: 16px 0;">
               {{ course.description.slice(0, 100) }}...
             </p>
-            <p style="font-size: 24px; font-weight: bold; color: #28A745; margin: 16px 0;" aria-label="Стоимость">
-              Цена: {{ course.gross_price }} руб.
+            <p style="font-size: 20px; font-weight: bold; color: #28A745; margin: 16px 0;" aria-label="Стоимость">
+              {{ course.gross_price }} руб.
             </p>
           </v-card-text>
-          <v-card-actions style="display: flex; justify-content: space-between; gap: 8px;">
-            <v-btn
-              color="#28A745"
-              :to="`/courses/${course.id}`"
-              style="min-width: 100px;"
-              v-tooltip="'Узнать подробности о курсе'"
-              aria-label="Подробней"
+          <v-card-actions class="justify-space-between">
+            <v-btn 
+              color="#28A745" 
+              :to="`/courses/${course.id}`" 
+              v-tooltip="'Подробнее об услуге'" 
+              aria-label="Подробнее об услуге"
             >
-              Подробней
+              Подробнее
             </v-btn>
-            <v-btn
-              v-if="isLoggedIn"
-              outlined
-              color="#6C757D"
-              @click="openChat(course.teacher.id)"
-              style="min-width: 100px;"
-              v-tooltip="'Связаться с автором'"
-              aria-label="Связаться"
+            <v-btn 
+              v-if="course.teacher.id !== userId"
+              color="#28A745" 
+              @click="openChat(course.teacher.id)" 
+              v-tooltip="'Написать автору'" 
+              aria-label="Написать автору"
             >
-              Связаться
-            </v-btn>
-            <v-btn
-              v-else
-              to="/login"
-              style="min-width: 100px;"
-              v-tooltip="'Войти для действий'"
-              aria-label="Войти"
-            >
-              Войти
+              Написать
             </v-btn>
           </v-card-actions>
         </v-card>
-      </v-col>
-      <v-col cols="12" v-if="!loading && courses.length === 0">
-        <p class="text-center" style="font-size: 16px; color: #6C757D;" aria-label="Нет результатов поиска">Нет результатов</p>
       </v-col>
     </v-row>
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000" aria-label="Уведомление">
@@ -97,10 +82,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch, computed } from 'vue'
-import { debounce } from 'lodash'
-import { useRuntimeConfig } from 'nuxt/app'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useRuntimeConfig } from 'nuxt/app'
+import { debounce } from 'lodash'
 
 const config = useRuntimeConfig()
 const router = useRouter()
@@ -112,6 +97,7 @@ const loading = ref(true)
 const snackbar = ref(false)
 const snackbarText = ref('')
 const snackbarColor = ref('error')
+const userId = ref(null)
 
 const searchFieldStyle = computed(() => ({
   backgroundColor: '#FFFFFF',
@@ -125,6 +111,7 @@ onMounted(() => {
   if (process.client) {
     token.value = localStorage.getItem('token')
     isLoggedIn.value = !!token.value
+    userId.value = localStorage.getItem('userId') ? parseInt(localStorage.getItem('userId')) : null
   }
   search()
 })

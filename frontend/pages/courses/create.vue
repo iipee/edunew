@@ -2,9 +2,9 @@
   <v-container>
     <v-row justify="center">
       <v-col cols="12" sm="8" md="6">
-        <v-card class="pa-6" aria-label="Форма создания курса">
+        <v-card class="pa-6" aria-label="Форма создания услуги">
           <v-card-title class="justify-center">
-            <h2 aria-label="Создать курс">Создать курс</h2>
+            <h2 aria-label="Создать услугу">Создать услугу</h2>
           </v-card-title>
           <v-card-text>
             <v-alert v-if="errorMessage" type="error" dismissible class="mb-4" aria-label="Ошибка">
@@ -13,11 +13,11 @@
             <v-form v-model="valid" @submit.prevent="createCourse">
               <v-text-field
                 v-model="form.title"
-                label="Название курса"
+                label="Название услуги"
                 prepend-icon="mdi-food-apple"
                 :rules="[v => !!v || 'Название обязательно']"
                 required
-                aria-label="Название курса"
+                aria-label="Название услуги"
               />
               <v-textarea
                 v-model="form.services"
@@ -29,11 +29,11 @@
               />
               <v-textarea
                 v-model="form.description"
-                label="Описание курса"
+                label="Описание услуги"
                 prepend-icon="mdi-information"
                 :rules="[v => !!v || 'Описание обязательно']"
                 required
-                aria-label="Описание курса"
+                aria-label="Описание услуги"
               />
               <v-text-field
                 v-model="form.net_price"
@@ -56,10 +56,10 @@
                 :disabled="!valid"
                 block
                 class="mt-4"
-                v-tooltip="'Создать новый курс'"
-                aria-label="Создать курс"
+                v-tooltip="'Создать новую услугу'"
+                aria-label="Создать услугу"
               >
-                Создать курс
+                Создать услугу
               </v-btn>
             </v-form>
           </v-card-text>
@@ -124,7 +124,7 @@ const createCourse = async () => {
     body 
   })
   if (error.value) {
-    errorMessage.value = 'Ошибка создания курса: ' + (error.value.data?.error || 'Неизвестная ошибка')
+    errorMessage.value = 'Ошибка создания услуги: ' + (error.value.data?.error || 'Неизвестная ошибка')
     return
   }
   router.push('/profile')

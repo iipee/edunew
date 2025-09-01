@@ -10,18 +10,18 @@
             <v-alert v-if="errorMessage" type="error" dismissible class="mb-4" aria-label="Сообщение об ошибке">
               {{ errorMessage }}
             </v-alert>
-            <v-list v-if="courses.length > 0" aria-label="Список доступных курсов">
-              <v-list-item v-for="(course, index) in courses" :key="index" aria-label="Курс">
+            <v-list v-if="courses.length > 0" aria-label="Список доступных услуг">
+              <v-list-item v-for="(course, index) in courses" :key="index" aria-label="Услуга">
                 <v-list-item-content>
-                  <v-list-item-title aria-label="Название курса">{{ course.title }} - <span style="font-size:20px;color:#28A745;font-weight:bold;">{{ course.gross_price }} руб.</span></v-list-item-title>
-                  <v-list-item-subtitle aria-label="Описание курса">{{ course.description }}</v-list-item-subtitle>
+                  <v-list-item-title aria-label="Название услуги">{{ course.title }} - <span style="font-size:20px;color:#28A745;font-weight:bold;">{{ course.gross_price }} руб.</span></v-list-item-title>
+                  <v-list-item-subtitle aria-label="Описание услуги">{{ course.description }}</v-list-item-subtitle>
                 </v-list-item-content>
                 <v-list-item-action>
                   <v-btn 
                     color="#28A745" 
                     @click="orderCourse(course)" 
                     v-tooltip="'Записаться'" 
-                    aria-label="Записаться на курс"
+                    aria-label="Записаться на услугу"
                   >
                     Записаться
                   </v-btn>

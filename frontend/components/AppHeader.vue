@@ -4,7 +4,7 @@
       <span style="color: #28A745;">NutriPlatform</span>
     </v-toolbar-title>
     <v-spacer />
-    <v-btn icon to="/search" aria-label="Поиск курсов">
+    <v-btn icon to="/search" aria-label="Поиск услуг">
       <v-icon :color="themeStore.theme === 'dark' ? '#A5D6A7' : '#28A745'">mdi-magnify</v-icon>
     </v-btn>
     <v-btn text to="/" aria-label="Перейти на главную страницу">Главная</v-btn>
@@ -12,9 +12,9 @@
       v-if="isLoggedIn && role === 'nutri'" 
       text 
       to="/courses/create" 
-      aria-label="Создать новый курс"
+      aria-label="Создать новую услугу"
     >
-      Создать курс
+      Создать услугу
     </v-btn>
     <v-btn 
       v-if="!isLoggedIn" 
@@ -44,9 +44,10 @@
       v-if="isLoggedIn" 
       icon 
       to="/chats" 
+      v-tooltip="'Открыть чаты (доступно для связи с клиентами и другими нутрициологами)'" 
       aria-label="Чат"
     >
-      <v-badge :content="chatStore.unreadCount" color="error" overlap v-if="chatStore.unreadCount > 0">
+      <v-badge :content="chatStore.getUnreadCount" color="error" overlap v-if="chatStore.getUnreadCount > 0">
         <v-icon :color="themeStore.theme === 'dark' ? '#A5D6A7' : '#28A745'">mdi-message-text</v-icon>
       </v-badge>
       <v-icon :color="themeStore.theme === 'dark' ? '#A5D6A7' : '#28A745'" v-else>mdi-message-text</v-icon>
@@ -65,7 +66,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useNuxtApp } from 'nuxt/app'
 import { useChatStore } from '~/stores/chat'
@@ -78,20 +79,29 @@ const chatStore = useChatStore()
 const themeStore = useThemeStore()
 const authStore = useAuthStore()
 
-// Reactive state from authStore
 const isLoggedIn = computed(() => authStore.isLoggedIn)
 const role = computed(() => authStore.role || '')
 
 onMounted(() => {
-  authStore.initialize() // Ensure store is initialized with localStorage data
+  authStore.initialize()
   if (isLoggedIn.value) {
+    chatStore.connectWebSocket()
     chatStore.fetchDialogs()
   }
 })
 
+watch(isLoggedIn, (loggedIn) => {
+  if (loggedIn) {
+    chatStore.connectWebSocket()
+    chatStore.fetchDialogs()
+  } else {
+    $websocket.close()
+  }
+})
+
 const logout = () => {
-  authStore.clearUser() // Use store to clear auth data
-  $websocket.disconnect()
+  authStore.clearUser()
+  $websocket.close()
   router.push('/login')
 }
 </script>

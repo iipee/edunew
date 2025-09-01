@@ -6,12 +6,56 @@ export const useChatStore = defineStore('chat', {
     dialogs: [],
     messages: [],
     loading: false,
-    error: null
+    error: null,
+    unreadCount: 0,
+    websocket: null
   }),
   getters: {
-    unreadCount: (state) => state.dialogs.reduce((sum, dialog) => sum + (dialog.unread_count || 0), 0)
+    getUnreadCount: (state) => state.dialogs.reduce((sum, dialog) => sum + (dialog.unread_count || 0), 0)
   },
   actions: {
+    connectWebSocket() {
+      if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+        return
+      }
+      const config = useRuntimeConfig()
+      const token = localStorage.getItem('token')
+      if (!token) return
+
+      try {
+        this.websocket = new WebSocket(`${config.public.wsBase}/ws?token=${token}`)
+        this.websocket.onopen = () => {
+          console.log('WebSocket connected')
+        }
+        this.websocket.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data)
+            if (msg.type === 'message') {
+              this.handleNewMessage(msg.data)
+            }
+          } catch (error) {
+            console.error('WebSocket message parse error:', error)
+          }
+        }
+        this.websocket.onerror = (error) => {
+          console.error('WebSocket error:', error)
+          this.error = 'Ошибка соединения с WebSocket'
+        }
+        this.websocket.onclose = () => {
+          console.log('WebSocket closed')
+          this.websocket = null
+        }
+      } catch (error) {
+        console.error('WebSocket initialization error:', error)
+        this.error = 'Ошибка инициализации WebSocket'
+      }
+    },
+    closeWebSocket() {
+      if (this.websocket) {
+        this.websocket.close()
+        this.websocket = null
+      }
+    },
     async fetchDialogs() {
       this.loading = true
       this.error = null
@@ -46,7 +90,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
     async sendMessage(receiverId, content) {
-      console.log('Sending message to:', receiverId, 'Content:', content) // Дебаг-лог
+      console.log('Sending message to:', receiverId, 'Content:', content)
       const config = useRuntimeConfig()
       const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` }
       const body = { receiver_id: receiverId, content }
@@ -85,7 +129,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
     handleNewMessage(msg) {
-      console.log('New message received:', msg) // Дебаг-лог
+      console.log('New message received:', msg)
       const currentUserId = parseInt(localStorage.getItem('userId'))
       if (msg.sender_id === currentUserId || msg.receiver_id === currentUserId) {
         if (!this.messages.some(m => m.id === msg.id)) {
@@ -94,7 +138,10 @@ export const useChatStore = defineStore('chat', {
         const dialog = this.dialogs.find(d => d.user_id === (msg.sender_id === currentUserId ? msg.receiver_id : msg.sender_id))
         if (dialog) {
           dialog.last_message = msg.content
-          dialog.unread_count = msg.sender_id === currentUserId ? 0 : (dialog.unread_count || 0) + 1
+          dialog.last_message_at = msg.created_at
+          if (msg.sender_id !== currentUserId) {
+            dialog.unread_count = (dialog.unread_count || 0) + 1
+          }
         } else {
           this.fetchDialogs()
         }
