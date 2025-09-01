@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -147,35 +148,25 @@ type Dialog struct {
 	Receiver   User      `json:"receiver" gorm:"foreignKey:ReceiverID"`
 }
 
-// CORS middleware
-func corsMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "http://localhost:3000")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		c.Header("Access-Control-Allow-Credentials", "true")
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(http.StatusNoContent)
-			return
-		}
-		c.Next()
-	}
-}
-
 func main() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Println("Не удалось загрузить .env файл, используются переменные окружения")
+		log.Fatalf("Ошибка загрузки .env файла: %v", err)
 	}
 	dsn := os.Getenv("DSN")
 	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("Ошибка подключения к БД: %v", err)
 	}
-	db.AutoMigrate(&User{}, &Course{}, &Enrollment{}, &Review{}, &Payment{}, &Message{}, &Notification{}, &Dialog{})
-	// Создание тестового нутрициолога
+	log.Println("Database connected successfully")
+	if err := db.AutoMigrate(&User{}, &Course{}, &Enrollment{}, &Review{}, &Payment{}, &Message{}, &Notification{}, &Dialog{}); err != nil {
+		log.Fatalf("Ошибка миграции БД: %v", err)
+	}
+	log.Println("Database migration completed")
 	var count int64
-	db.Model(&User{}).Where("role = ?", "nutri").Count(&count)
+	if err := db.Model(&User{}).Where("role = ?", "nutri").Count(&count).Error; err != nil {
+		log.Printf("Ошибка проверки тестового нутрициолога: %v", err)
+	}
 	if count == 0 {
 		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("test123456"), bcrypt.DefaultCost)
 		testNutri := User{
@@ -194,9 +185,13 @@ func main() {
 		}
 	}
 	r = gin.Default()
-	r.Use(gin.Logger())
-	r.Use(gin.Recovery())
-	r.Use(corsMiddleware())
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:3000"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Authorization", "Content-Type"},
+		AllowCredentials: true,
+	}))
+	r.Static("/avatars", "./uploads/avatars")
 	api := r.Group("/api")
 	api.POST("/register", register)
 	api.POST("/login", login)
@@ -204,6 +199,7 @@ func main() {
 	api.GET("/profile/:id", getProfile)
 	api.PUT("/profile", authMiddleware, updateProfile)
 	api.POST("/profile/update-card", authMiddleware, updateCard)
+	api.POST("/profile/upload-avatar", authMiddleware, uploadAvatarHandler)
 	api.GET("/search", searchCourses)
 	api.GET("/courses", authMiddleware, getCourses)
 	api.POST("/courses", authMiddleware, createCourse)
@@ -222,14 +218,47 @@ func main() {
 	api.GET("/messages", authMiddleware, getMessages)
 	api.POST("/messages", authMiddleware, sendMessage)
 	api.PUT("/messages/read", authMiddleware, markRead)
-	r.GET("/ws", func(c *gin.Context) {
-		handleWebSocket(c.Writer, c.Request)
-	})
+	r.GET("/ws", handleWebSocket)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-	r.Run(":" + port)
+	log.Printf("Starting server on port %s", port)
+	if err := r.Run(":" + port); err != nil {
+		log.Fatalf("Ошибка запуска сервера: %v", err)
+	}
+}
+
+func authMiddleware(c *gin.Context) {
+	tokenString := c.GetHeader("Authorization")
+	if tokenString == "" {
+		log.Println("authMiddleware: Токен не предоставлен")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Токен не предоставлен"})
+		c.Abort()
+		return
+	}
+	tokenString = strings.Replace(tokenString, "Bearer ", "", 1)
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		return []byte(os.Getenv("JWT_SECRET")), nil
+	})
+	if err != nil || !token.Valid {
+		log.Printf("authMiddleware: Неверный токен: %v", err)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверный токен"})
+		c.Abort()
+		return
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		log.Println("authMiddleware: Неверные данные токена")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверные данные токена"})
+		c.Abort()
+		return
+	}
+	userID := int(claims["id"].(float64))
+	role := claims["role"].(string)
+	c.Set("userID", userID)
+	c.Set("role", role)
+	c.Next()
 }
 
 func register(c *gin.Context) {
@@ -242,15 +271,18 @@ func register(c *gin.Context) {
 		Description string `json:"description"`
 	}
 	if err := c.BindJSON(&input); err != nil {
+		log.Printf("register: Неверные данные: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	if input.Role != "client" && input.Role != "nutri" {
+		log.Println("register: Неверная роль")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверная роль"})
 		return
 	}
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
 	if err != nil {
+		log.Printf("register: Ошибка хеширования пароля: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка хеширования пароля"})
 		return
 	}
@@ -263,6 +295,7 @@ func register(c *gin.Context) {
 		Description: input.Description,
 	}
 	if err := db.Create(&user).Error; err != nil {
+		log.Printf("register: Ошибка создания пользователя: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания пользователя"})
 		return
 	}
@@ -273,6 +306,7 @@ func register(c *gin.Context) {
 	})
 	tokenString, err := token.SignedString([]byte(os.Getenv("JWT_SECRET")))
 	if err != nil {
+		log.Printf("register: Ошибка генерации токена: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка генерации токена"})
 		return
 	}
@@ -285,15 +319,18 @@ func login(c *gin.Context) {
 		Password string `json:"password"`
 	}
 	if err := c.BindJSON(&input); err != nil {
+		log.Printf("login: Неверные данные: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	var user User
 	if err := db.Where("username = ?", input.Username).First(&user).Error; err != nil {
+		log.Printf("login: Пользователь не найден: %v", err)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверные данные"})
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
+		log.Println("login: Неверный пароль")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверные данные"})
 		return
 	}
@@ -304,39 +341,11 @@ func login(c *gin.Context) {
 	})
 	tokenString, err := token.SignedString([]byte(os.Getenv("JWT_SECRET")))
 	if err != nil {
+		log.Printf("login: Ошибка генерации токена: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка генерации токена"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"token": tokenString, "role": user.Role, "id": user.ID})
-}
-
-func authMiddleware(c *gin.Context) {
-	tokenString := c.GetHeader("Authorization")
-	if tokenString == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Токен не предоставлен"})
-		c.Abort()
-		return
-	}
-	tokenString = strings.Replace(tokenString, "Bearer ", "", 1)
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		return []byte(os.Getenv("JWT_SECRET")), nil
-	})
-	if err != nil || !token.Valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверный токен"})
-		c.Abort()
-		return
-	}
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Неверные данные токена"})
-		c.Abort()
-		return
-	}
-	userID := int(claims["id"].(float64))
-	role := claims["role"].(string)
-	c.Set("userID", userID)
-	c.Set("role", role)
-	c.Next()
 }
 
 func getProfile(c *gin.Context) {
@@ -346,6 +355,7 @@ func getProfile(c *gin.Context) {
 	if idStr != "" {
 		userID, err = strconv.Atoi(idStr)
 		if err != nil {
+			log.Printf("getProfile: Неверный ID: %v", err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
 			return
 		}
@@ -354,12 +364,23 @@ func getProfile(c *gin.Context) {
 	}
 	var user User
 	if err := db.First(&user, userID).Error; err != nil {
+		log.Printf("getProfile: Пользователь не найден: %v", err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
 		return
 	}
 	var courses []Course
-	db.Where("teacher_id = ?", userID).Find(&courses)
-	c.JSON(http.StatusOK, gin.H{"profile": user, "courses": courses})
+	if err := db.Where("teacher_id = ?", userID).Find(&courses).Error; err != nil {
+		log.Printf("getProfile: Ошибка получения курсов: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения курсов"})
+		return
+	}
+	var reviews []Review
+	if err := db.Preload("Author").Where("course_id IN (SELECT id FROM courses WHERE teacher_id = ?)", userID).Find(&reviews).Error; err != nil {
+		log.Printf("getProfile: Ошибка получения отзывов: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения отзывов"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"profile": user, "courses": courses, "reviews": reviews})
 }
 
 func updateProfile(c *gin.Context) {
@@ -369,10 +390,12 @@ func updateProfile(c *gin.Context) {
 		Description string `json:"description"`
 	}
 	if err := c.BindJSON(&input); err != nil {
+		log.Printf("updateProfile: Неверные данные: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	if err := db.Model(&User{}).Where("id = ?", userID).Updates(User{FullName: input.FullName, Description: input.Description}).Error; err != nil {
+		log.Printf("updateProfile: Ошибка обновления профиля: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления профиля"})
 		return
 	}
@@ -385,20 +408,24 @@ func updateCard(c *gin.Context) {
 		CardNumber string `json:"card_number"`
 	}
 	if err := c.BindJSON(&input); err != nil {
+		log.Printf("updateCard: Неверные данные: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	if matched, _ := regexp.MatchString(`^\d{16}$`, input.CardNumber); !matched {
+		log.Println("updateCard: Неверный номер карты")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный номер карты"})
 		return
 	}
 	key, err := hex.DecodeString(os.Getenv("AES_KEY"))
 	if err != nil {
+		log.Printf("updateCard: Ошибка декодирования ключа AES: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка шифрования"})
 		return
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
+		log.Printf("updateCard: Ошибка создания шифра: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка шифрования"})
 		return
 	}
@@ -406,6 +433,7 @@ func updateCard(c *gin.Context) {
 	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
 	iv := ciphertext[:aes.BlockSize]
 	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		log.Printf("updateCard: Ошибка генерации IV: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка шифрования"})
 		return
 	}
@@ -413,10 +441,51 @@ func updateCard(c *gin.Context) {
 	mode.CryptBlocks(ciphertext[aes.BlockSize:], plaintext)
 	encrypted := hex.EncodeToString(ciphertext)
 	if err := db.Model(&User{}).Where("id = ?", userID).Update("encrypted_card", encrypted).Error; err != nil {
+		log.Printf("updateCard: Ошибка обновления карты: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления карты"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Карта обновлена"})
+}
+
+func uploadAvatarHandler(c *gin.Context) {
+	userID := c.GetInt("userID")
+	file, err := c.FormFile("avatar")
+	if err != nil {
+		log.Printf("uploadAvatar: Ошибка получения файла: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ошибка загрузки файла"})
+		return
+	}
+	if file.Size > 5*1024*1024 {
+		log.Println("uploadAvatar: Файл слишком большой")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Файл превышает 5MB"})
+		return
+	}
+	filename := uuid.New().String() + ".jpg"
+	path := "./uploads/avatars/" + filename
+	if err := os.MkdirAll("./uploads/avatars", os.ModePerm); err != nil {
+		log.Printf("uploadAvatar: Ошибка создания директории: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
+		return
+	}
+	if err := c.SaveUploadedFile(file, path); err != nil {
+		log.Printf("uploadAvatar: Ошибка сохранения файла: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сохранения файла"})
+		return
+	}
+	var user User
+	if err := db.First(&user, userID).Error; err != nil {
+		log.Printf("uploadAvatar: Пользователь не найден: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
+		return
+	}
+	user.AvatarURL = "/avatars/" + filename
+	if err := db.Save(&user).Error; err != nil {
+		log.Printf("uploadAvatar: Ошибка сохранения аватара: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сохранения аватара"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Аватар загружен", "profile": user})
 }
 
 func searchCourses(c *gin.Context) {
@@ -424,12 +493,11 @@ func searchCourses(c *gin.Context) {
 	var courses []Course
 	dbQuery := db.Preload("Teacher")
 	if query != "" {
-		// Формируем JSONB-массив для services
 		jsonQuery := fmt.Sprintf(`["%s"]`, query)
 		dbQuery = dbQuery.Where("title ILIKE ? OR description ILIKE ? OR services @> ?", "%"+query+"%", "%"+query+"%", jsonQuery)
 	}
 	if err := dbQuery.Find(&courses).Error; err != nil {
-		log.Printf("Ошибка поиска: %v", err)
+		log.Printf("searchCourses: Ошибка поиска курсов: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка поиска"})
 		return
 	}
@@ -441,6 +509,7 @@ func getCourses(c *gin.Context) {
 	userID := c.GetInt("userID")
 	var courses []Course
 	if err := db.Where("teacher_id = ?", userID).Find(&courses).Error; err != nil {
+		log.Printf("getCourses: Ошибка получения курсов: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения курсов"})
 		return
 	}
@@ -451,6 +520,7 @@ func createCourse(c *gin.Context) {
 	userID := c.GetInt("userID")
 	role := c.GetString("role")
 	if role != "nutri" {
+		log.Println("createCourse: Доступ запрещён")
 		c.JSON(http.StatusForbidden, gin.H{"error": "Доступ только для нутрициологов"})
 		return
 	}
@@ -462,10 +532,12 @@ func createCourse(c *gin.Context) {
 		VideoURL    string      `json:"video_url"`
 	}
 	if err := c.BindJSON(&input); err != nil {
+		log.Printf("createCourse: Неверные данные: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	if input.NetPrice <= 0 {
+		log.Println("createCourse: Неверная цена")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Чистая цена должна быть больше 0"})
 		return
 	}
@@ -481,6 +553,7 @@ func createCourse(c *gin.Context) {
 		VideoURL:    input.VideoURL,
 	}
 	if err := db.Create(&course).Error; err != nil {
+		log.Printf("createCourse: Ошибка создания курса: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания курса"})
 		return
 	}
@@ -491,11 +564,13 @@ func getCourse(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
+		log.Printf("getCourse: Неверный ID: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
 		return
 	}
 	var course Course
 	if err := db.Preload("Teacher").First(&course, id).Error; err != nil {
+		log.Printf("getCourse: Курс не найден: %v", err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "Курс не найден"})
 		return
 	}
@@ -506,6 +581,7 @@ func createPayment(c *gin.Context) {
 	userID := c.GetInt("userID")
 	role := c.GetString("role")
 	if role != "client" {
+		log.Println("createPayment: Доступ запрещён")
 		c.JSON(http.StatusForbidden, gin.H{"error": "Доступ только для клиентов"})
 		return
 	}
@@ -513,11 +589,13 @@ func createPayment(c *gin.Context) {
 		CourseID int `json:"course_id"`
 	}
 	if err := c.BindJSON(&input); err != nil {
+		log.Printf("createPayment: Неверные данные: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	var course Course
 	if err := db.First(&course, input.CourseID).Error; err != nil {
+		log.Printf("createPayment: Курс не найден: %v", err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "Курс не найден"})
 		return
 	}
@@ -533,11 +611,10 @@ func createPayment(c *gin.Context) {
 		Status:      "pending",
 	}
 	if err := db.Create(&payment).Error; err != nil {
-		log.Printf("Ошибка создания платежа: %v", err)
+		log.Printf("createPayment: Ошибка создания платежа: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
 		return
 	}
-	// Интеграция с ЮKassa
 	shopID := os.Getenv("SHOP_ID")
 	secretKey := os.Getenv("SECRET_KEY")
 	apiURL := "https://api.yookassa.ru/v3/payments"
@@ -551,17 +628,17 @@ func createPayment(c *gin.Context) {
 			"return_url": "http://localhost:3000/return?payment_id=" + strconv.Itoa(payment.ID),
 		},
 		"capture":     true,
-		"description": "Оплата курса " + course.Title,
+		"description": "Оплата услуги " + course.Title,
 	}
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
-		log.Printf("Ошибка marshal body для ЮKassa: %v", err)
+		log.Printf("createPayment: Ошибка marshal body: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
 		return
 	}
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(bodyJSON))
 	if err != nil {
-		log.Printf("Ошибка создания запроса ЮKassa: %v", err)
+		log.Printf("createPayment: Ошибка создания запроса: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
 		return
 	}
@@ -571,26 +648,26 @@ func createPayment(c *gin.Context) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Ошибка запроса к ЮKassa: %v", err)
+		log.Printf("createPayment: Ошибка запроса к ЮKassa: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		bodyErr, _ := io.ReadAll(resp.Body)
-		log.Printf("Ошибка ЮKassa: status %d, body: %s", resp.StatusCode, string(bodyErr))
+		log.Printf("createPayment: Ошибка ЮKassa: status %d, body: %s", resp.StatusCode, string(bodyErr))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа в ЮKassa"})
 		return
 	}
 	var yookassaResp map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&yookassaResp); err != nil {
-		log.Printf("Ошибка парсинга ответа ЮKassa: %v", err)
+		log.Printf("createPayment: Ошибка парсинга ответа ЮKassa: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
 		return
 	}
 	payment.YookassaID = yookassaResp["id"].(string)
 	if err := db.Save(&payment).Error; err != nil {
-		log.Printf("Ошибка сохранения YookassaID: %v", err)
+		log.Printf("createPayment: Ошибка сохранения YookassaID: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
 		return
 	}
@@ -602,25 +679,27 @@ func returnPayment(c *gin.Context) {
 	paymentIDStr := c.Query("payment_id")
 	paymentID, err := strconv.Atoi(paymentIDStr)
 	if err != nil {
+		log.Printf("returnPayment: Неверный ID платежа: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID платежа"})
 		return
 	}
 	var payment Payment
 	if err := db.First(&payment, paymentID).Error; err != nil {
+		log.Printf("returnPayment: Платеж не найден: %v", err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "Платеж не найден"})
 		return
 	}
 	if payment.YookassaID == "" {
+		log.Println("returnPayment: Платеж не инициализирован")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Платеж не инициализирован"})
 		return
 	}
-	// Проверка статуса через API ЮKassa
 	shopID := os.Getenv("SHOP_ID")
 	secretKey := os.Getenv("SECRET_KEY")
 	apiURL := "https://api.yookassa.ru/v3/payments/" + payment.YookassaID
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
-		log.Printf("Ошибка создания запроса для проверки: %v", err)
+		log.Printf("returnPayment: Ошибка создания запроса: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка проверки платежа"})
 		return
 	}
@@ -628,20 +707,20 @@ func returnPayment(c *gin.Context) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Ошибка запроса проверки ЮKassa: %v", err)
+		log.Printf("returnPayment: Ошибка запроса к ЮKassa: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка проверки платежа"})
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		bodyErr, _ := io.ReadAll(resp.Body)
-		log.Printf("Ошибка проверки ЮKassa: status %d, body: %s", resp.StatusCode, string(bodyErr))
+		log.Printf("returnPayment: Ошибка ЮKassa: status %d, body: %s", resp.StatusCode, string(bodyErr))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка проверки платежа в ЮKassa"})
 		return
 	}
 	var yookassaResp map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&yookassaResp); err != nil {
-		log.Printf("Ошибка парсинга ответа проверки: %v", err)
+		log.Printf("returnPayment: Ошибка парсинга ответа: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка проверки платежа"})
 		return
 	}
@@ -650,18 +729,18 @@ func returnPayment(c *gin.Context) {
 		payment.Status = "paid"
 		payment.TransactionID = yookassaResp["id"].(string)
 		if err := db.Save(&payment).Error; err != nil {
-			log.Printf("Ошибка обновления платежа: %v", err)
+			log.Printf("returnPayment: Ошибка обновления платежа: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления платежа"})
 			return
 		}
 		var course Course
 		if err := db.First(&course, payment.CourseID).Error; err != nil {
-			log.Printf("Курс не найден: %v", err)
+			log.Printf("returnPayment: Курс не найден: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Курс не найден"})
 			return
 		}
 		if err := db.Model(&User{}).Where("id = ?", course.TeacherID).Update("balance", gorm.Expr("balance + ?", payment.NetAmount)).Error; err != nil {
-			log.Printf("Ошибка начисления баланса: %v", err)
+			log.Printf("returnPayment: Ошибка начисления баланса: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка начисления баланса"})
 			return
 		}
@@ -670,7 +749,7 @@ func returnPayment(c *gin.Context) {
 			UserID:   payment.UserID,
 		}
 		if err := db.Create(&enrollment).Error; err != nil {
-			log.Printf("Ошибка создания записи: %v", err)
+			log.Printf("returnPayment: Ошибка создания записи: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания записи"})
 			return
 		}
@@ -679,7 +758,9 @@ func returnPayment(c *gin.Context) {
 		return
 	} else if status == "canceled" || status == "failed" {
 		payment.Status = "failed"
-		db.Save(&payment)
+		if err := db.Save(&payment).Error; err != nil {
+			log.Printf("returnPayment: Ошибка обновления платежа: %v", err)
+		}
 		c.JSON(http.StatusOK, gin.H{"status": "failed", "message": "Оплата не удалась"})
 		return
 	}
@@ -689,13 +770,13 @@ func returnPayment(c *gin.Context) {
 func webhookYookassa(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		log.Printf("Ошибка чтения webhook: %v", err)
+		log.Printf("webhookYookassa: Ошибка чтения webhook: %v", err)
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	signatureHeader := c.GetHeader("Content-Signature")
 	if signatureHeader == "" {
-		log.Println("Webhook: signature отсутствует")
+		log.Println("webhookYookassa: Signature отсутствует")
 		c.Status(http.StatusBadRequest)
 		return
 	}
@@ -704,13 +785,13 @@ func webhookYookassa(c *gin.Context) {
 	h.Write(body)
 	expectedSignature := "sha256=" + hex.EncodeToString(h.Sum(nil))
 	if signatureHeader != expectedSignature {
-		log.Printf("Webhook: неверная signature: expected %s, got %s", expectedSignature, signatureHeader)
+		log.Printf("webhookYookassa: Неверная signature: expected %s, got %s", expectedSignature, signatureHeader)
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	var payload map[string]interface{}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		log.Printf("Ошибка парсинга webhook: %v", err)
+		log.Printf("webhookYookassa: Ошибка парсинга webhook: %v", err)
 		c.Status(http.StatusBadRequest)
 		return
 	}
@@ -720,7 +801,7 @@ func webhookYookassa(c *gin.Context) {
 		yookassaID := object["id"].(string)
 		var payment Payment
 		if err := db.Where("yookassa_id = ?", yookassaID).First(&payment).Error; err != nil {
-			log.Printf("Платеж не найден: %v", err)
+			log.Printf("webhookYookassa: Платеж не найден: %v", err)
 			c.Status(http.StatusOK)
 			return
 		}
@@ -731,18 +812,18 @@ func webhookYookassa(c *gin.Context) {
 		payment.Status = "paid"
 		payment.TransactionID = yookassaID
 		if err := db.Save(&payment).Error; err != nil {
-			log.Printf("Ошибка обновления платежа в webhook: %v", err)
+			log.Printf("webhookYookassa: Ошибка обновления платежа: %v", err)
 			c.Status(http.StatusOK)
 			return
 		}
 		var course Course
 		if err := db.First(&course, payment.CourseID).Error; err != nil {
-			log.Printf("Курс не найден в webhook: %v", err)
+			log.Printf("webhookYookassa: Курс не найден: %v", err)
 			c.Status(http.StatusOK)
 			return
 		}
 		if err := db.Model(&User{}).Where("id = ?", course.TeacherID).Update("balance", gorm.Expr("balance + ?", payment.NetAmount)).Error; err != nil {
-			log.Printf("Ошибка начисления баланса в webhook: %v", err)
+			log.Printf("webhookYookassa: Ошибка начисления баланса: %v", err)
 			c.Status(http.StatusOK)
 			return
 		}
@@ -751,17 +832,17 @@ func webhookYookassa(c *gin.Context) {
 			UserID:   payment.UserID,
 		}
 		if err := db.Create(&enrollment).Error; err != nil {
-			log.Printf("Ошибка создания записи в webhook: %v", err)
+			log.Printf("webhookYookassa: Ошибка создания записи: %v", err)
 			c.Status(http.StatusOK)
 			return
 		}
 		notification := Notification{
 			UserID:  course.TeacherID,
 			Type:    "payment",
-			Content: "Получена оплата за курс " + course.Title + ": " + payment.NetAmount.StringFixed(2) + " руб.",
+			Content: "Получена оплата за услугу " + course.Title + ": " + payment.NetAmount.StringFixed(2) + " руб.",
 		}
 		if err := db.Create(&notification).Error; err != nil {
-			log.Printf("Ошибка создания уведомления: %v", err)
+			log.Printf("webhookYookassa: Ошибка создания уведомления: %v", err)
 		}
 		notifJSON, _ := json.Marshal(map[string]interface{}{
 			"type": "notification",
@@ -776,11 +857,13 @@ func getUserReviews(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
+		log.Printf("getUserReviews: Неверный ID: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
 		return
 	}
 	var reviews []Review
 	if err := db.Preload("Author").Where("course_id IN (SELECT id FROM courses WHERE teacher_id = ?)", id).Find(&reviews).Error; err != nil {
+		log.Printf("getUserReviews: Ошибка получения отзывов: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения отзывов"})
 		return
 	}
@@ -791,11 +874,13 @@ func getCourseReviews(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
+		log.Printf("getCourseReviews: Неверный ID: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID"})
 		return
 	}
 	var reviews []Review
 	if err := db.Preload("Author").Where("course_id = ?", id).Find(&reviews).Error; err != nil {
+		log.Printf("getCourseReviews: Ошибка получения отзывов: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения отзывов"})
 		return
 	}
@@ -805,6 +890,7 @@ func getCourseReviews(c *gin.Context) {
 func getRandomReviews(c *gin.Context) {
 	var reviews []Review
 	if err := db.Preload("Author").Order("RANDOM()").Limit(6).Find(&reviews).Error; err != nil {
+		log.Printf("getRandomReviews: Ошибка получения отзывов: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения отзывов"})
 		return
 	}
@@ -818,11 +904,13 @@ func createReview(c *gin.Context) {
 		Content  string `json:"content"`
 	}
 	if err := c.BindJSON(&input); err != nil {
+		log.Printf("createReview: Неверные данные: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	var enrollment Enrollment
 	if err := db.Where("user_id = ? AND course_id = ?", userID, input.CourseID).First(&enrollment).Error; err != nil {
+		log.Printf("createReview: Отзыв запрещён: %v", err)
 		c.JSON(http.StatusForbidden, gin.H{"error": "Отзыв возможен только после оплаты"})
 		return
 	}
@@ -832,6 +920,7 @@ func createReview(c *gin.Context) {
 		Content:  input.Content,
 	}
 	if err := db.Create(&review).Error; err != nil {
+		log.Printf("createReview: Ошибка создания отзыва: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания отзыва"})
 		return
 	}
@@ -842,6 +931,7 @@ func getEnrolled(c *gin.Context) {
 	userID := c.GetInt("userID")
 	var enrollments []Enrollment
 	if err := db.Preload("Course.Teacher").Where("user_id = ?", userID).Find(&enrollments).Error; err != nil {
+		log.Printf("getEnrolled: Ошибка получения записей: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения записей"})
 		return
 	}
@@ -861,7 +951,7 @@ func getNutris(c *gin.Context) {
 		dbQuery = dbQuery.Limit(limit)
 	}
 	if err := dbQuery.Find(&nutris).Error; err != nil {
-		log.Printf("Ошибка получения нутрициологов: %v", err)
+		log.Printf("getNutris: Ошибка получения нутрициологов: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения нутрициологов"})
 		return
 	}
@@ -875,34 +965,39 @@ func startChat(c *gin.Context) {
 		ReceiverID int `json:"receiver_id"`
 	}
 	if err := c.BindJSON(&input); err != nil {
+		log.Printf("startChat: Неверные данные: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	if userID == input.ReceiverID {
+		log.Println("startChat: Нельзя начать чат с самим собой")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Нельзя начать чат с самим собой"})
 		return
 	}
 	var count int64
-	db.Model(&Dialog{}).Where("(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)", userID, input.ReceiverID, input.ReceiverID, userID).Count(&count)
+	if err := db.Model(&Dialog{}).Where("(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)", userID, input.ReceiverID, input.ReceiverID, userID).Count(&count).Error; err != nil {
+		log.Printf("startChat: Ошибка проверки диалога: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка начала чата"})
+		return
+	}
 	if count == 0 {
 		dialog := Dialog{
 			SenderID:   userID,
 			ReceiverID: input.ReceiverID,
 		}
 		if err := db.Create(&dialog).Error; err != nil {
-			log.Printf("Ошибка создания диалога: %v", err)
+			log.Printf("startChat: Ошибка создания диалога: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка начала чата"})
 			return
 		}
 		log.Printf("Создан диалог %d -> %d", userID, input.ReceiverID)
 	}
-	// Emit 'chat:started' для инициатора через WebSocket
 	chatStartedJSON, err := json.Marshal(map[string]interface{}{
 		"type": "chat:started",
 		"data": map[string]int{"receiver_id": input.ReceiverID},
 	})
 	if err != nil {
-		log.Printf("Ошибка marshal chat:started: %v", err)
+		log.Printf("startChat: Ошибка marshal chat:started: %v", err)
 	} else {
 		sendToUser(userID, chatStartedJSON)
 	}
@@ -933,7 +1028,7 @@ func getChats(c *gin.Context) {
 		) DESC
 	`, userID, userID, userID, userID, userID, userID, userID, userID, userID, userID).Scan(&dialogs).Error
 	if err != nil {
-		log.Printf("Ошибка получения чатов: %v", err)
+		log.Printf("getChats: Ошибка получения чатов: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения чатов"})
 		return
 	}
@@ -946,6 +1041,7 @@ func getMessages(c *gin.Context) {
 	receiverIDStr := c.Query("receiver_id")
 	receiverID, err := strconv.Atoi(receiverIDStr)
 	if err != nil {
+		log.Printf("getMessages: Неверный ID получателя: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверный ID получателя"})
 		return
 	}
@@ -953,6 +1049,7 @@ func getMessages(c *gin.Context) {
 	if err := db.Preload("Sender").Preload("Receiver").
 		Where("(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)", userID, receiverID, receiverID, userID).
 		Order("created_at ASC").Find(&messages).Error; err != nil {
+		log.Printf("getMessages: Ошибка получения сообщений: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения сообщений"})
 		return
 	}
@@ -966,6 +1063,7 @@ func sendMessage(c *gin.Context) {
 		Content    string `json:"content"`
 	}
 	if err := c.BindJSON(&input); err != nil {
+		log.Printf("sendMessage: Неверные данные: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
@@ -975,30 +1073,34 @@ func sendMessage(c *gin.Context) {
 		Content:    input.Content,
 	}
 	if err := db.Create(&message).Error; err != nil {
+		log.Printf("sendMessage: Ошибка отправки сообщения: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка отправки сообщения"})
 		return
 	}
-	db.First(&message)
+	if err := db.First(&message).Error; err != nil {
+		log.Printf("sendMessage: Ошибка загрузки сообщения: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки сообщения"})
+		return
+	}
 	msgJSON, err := json.Marshal(map[string]interface{}{
 		"type": "message",
 		"data": message,
 	})
 	if err != nil {
-		log.Printf("Ошибка marshal сообщения: %v", err)
+		log.Printf("sendMessage: Ошибка marshal сообщения: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки сообщения"})
 		return
 	}
-	// Отправляем только если пользователь онлайн
 	if conn, ok := clients[userID]; ok {
 		if err := conn.WriteMessage(websocket.TextMessage, msgJSON); err != nil {
-			log.Printf("Ошибка отправки WebSocket сообщения пользователю %d: %v", userID, err)
+			log.Printf("sendMessage: Ошибка отправки WebSocket сообщения пользователю %d: %v", userID, err)
 			conn.Close()
 			delete(clients, userID)
 		}
 	}
 	if conn, ok := clients[input.ReceiverID]; ok {
 		if err := conn.WriteMessage(websocket.TextMessage, msgJSON); err != nil {
-			log.Printf("Ошибка отправки WebSocket сообщения пользователю %d: %v", input.ReceiverID, err)
+			log.Printf("sendMessage: Ошибка отправки WebSocket сообщения пользователю %d: %v", input.ReceiverID, err)
 			conn.Close()
 			delete(clients, input.ReceiverID)
 		}
@@ -1013,26 +1115,28 @@ func markRead(c *gin.Context) {
 		ReceiverID int `json:"receiver_id"`
 	}
 	if err := c.BindJSON(&input); err != nil {
+		log.Printf("markRead: Неверные данные: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
 	if err := db.Model(&Message{}).Where("sender_id = ? AND receiver_id = ? AND read_at IS NULL", input.ReceiverID, userID).
 		Update("read_at", time.Now()).Error; err != nil {
-		log.Printf("Ошибка отметки прочитанных: %v", err)
+		log.Printf("markRead: Ошибка отметки прочитанных: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка отметки прочитанных"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Сообщения отмечены прочитанными"})
 }
 
-func handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+func handleWebSocket(c *gin.Context) {
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("Ошибка апгрейда WebSocket: %v", err)
+		log.Printf("handleWebSocket: Ошибка апгрейда WebSocket: %v", err)
 		return
 	}
-	tokenString := r.URL.Query().Get("token")
+	tokenString := c.Request.URL.Query().Get("token")
 	if tokenString == "" {
+		log.Println("handleWebSocket: Токен не предоставлен")
 		conn.WriteMessage(websocket.TextMessage, []byte("Токен не предоставлен"))
 		conn.Close()
 		return
@@ -1041,12 +1145,14 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return []byte(os.Getenv("JWT_SECRET")), nil
 	})
 	if err != nil || !token.Valid {
+		log.Printf("handleWebSocket: Неверный токен: %v", err)
 		conn.WriteMessage(websocket.TextMessage, []byte("Неверный токен"))
 		conn.Close()
 		return
 	}
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
+		log.Println("handleWebSocket: Неверные данные токена")
 		conn.WriteMessage(websocket.TextMessage, []byte("Неверные данные токена"))
 		conn.Close()
 		return
@@ -1066,7 +1172,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, _, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("Ошибка чтения WebSocket для пользователя %d: %v", userID, err)
+			log.Printf("handleWebSocket: Ошибка чтения WebSocket для пользователя %d: %v", userID, err)
 			break
 		}
 	}
@@ -1075,11 +1181,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 func sendToUser(userID int, message []byte) {
 	if conn, ok := clients[userID]; ok {
 		if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-			log.Printf("Ошибка отправки WebSocket сообщения пользователю %d: %v", userID, err)
+			log.Printf("sendToUser: Ошибка отправки WebSocket сообщения пользователю %d: %v", userID, err)
 			conn.Close()
 			delete(clients, userID)
 		}
 	} else {
-		log.Printf("Клиент %d не подключен для отправки", userID)
+		log.Printf("sendToUser: Клиент %d не подключен", userID)
 	}
 }

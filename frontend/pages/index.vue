@@ -49,7 +49,7 @@
                 aria-label="Карточка нутрициолога"
               >
                 <v-img
-                  src="/images/nutri-placeholder.jpg"
+                  :src="nutri.avatar_url || '/images/nutri-placeholder.jpg'"
                   width="150"
                   height="150"
                   class="mx-auto rounded-circle"

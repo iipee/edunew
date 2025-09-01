@@ -41,7 +41,9 @@
                 Войти
               </v-btn>
             </v-form>
-            <p class="mt-4 text-center" aria-label="Ссылка на регистрацию">Нет профиля? <NuxtLink to="/register">Зарегистрироваться</NuxtLink></p>
+            <p class="mt-4 text-center" aria-label="Ссылка на регистрацию">
+              Нет профиля? <NuxtLink to="/register" @click="debugClick">Зарегистрироваться</NuxtLink>
+            </p>
           </v-card-text>
         </v-card>
       </v-col>
@@ -82,5 +84,9 @@ const login = async () => {
   authStore.setUser(data.value.token, data.value.role, data.value.id)
   $emitter.emit('login') // Keep for compatibility with other components
   router.push('/profile')
+}
+
+function debugClick() {
+  console.log('Клик по ссылке Зарегистрироваться')
 }
 </script>
