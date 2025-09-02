@@ -4,20 +4,20 @@
       <span style="color: #28A745;">NutriPlatform</span>
     </v-toolbar-title>
     <v-spacer />
-    <v-btn icon to="/search" aria-label="Поиск услуг">
+    <v-btn icon to="/search" aria-label="Поиск курсов">
       <v-icon :color="themeStore.theme === 'dark' ? '#A5D6A7' : '#28A745'">mdi-magnify</v-icon>
     </v-btn>
     <v-btn text to="/" aria-label="Перейти на главную страницу">Главная</v-btn>
     <v-btn 
-      v-if="isLoggedIn && role === 'nutri'" 
+      v-if="authStore.isAuthenticated && authStore.role === 'nutri'" 
       text 
       to="/courses/create" 
-      aria-label="Создать новую услугу"
+      aria-label="Создать новый курс"
     >
-      Создать услугу
+      Создать курс
     </v-btn>
     <v-btn 
-      v-if="!isLoggedIn" 
+      v-if="!authStore.isAuthenticated" 
       text 
       to="/login" 
       aria-label="Войти в аккаунт"
@@ -25,7 +25,7 @@
       Войти
     </v-btn>
     <v-btn 
-      v-if="isLoggedIn" 
+      v-if="authStore.isAuthenticated" 
       text 
       to="/profile" 
       aria-label="Перейти в профиль"
@@ -33,21 +33,20 @@
       Профиль
     </v-btn>
     <v-btn 
-      v-if="isLoggedIn" 
+      v-if="authStore.isAuthenticated" 
       text 
-      @click="logout" 
+      @click="authStore.logout" 
       aria-label="Выйти из аккаунта"
     >
       Выйти
     </v-btn>
     <v-btn 
-      v-if="isLoggedIn" 
+      v-if="authStore.isAuthenticated" 
       icon 
       to="/chats" 
-      v-tooltip="'Открыть чаты (доступно для связи с клиентами и другими нутрициологами)'" 
       aria-label="Чат"
     >
-      <v-badge :content="chatStore.getUnreadCount" color="error" overlap v-if="chatStore.getUnreadCount > 0">
+      <v-badge :content="chatStore.unreadCount" color="error" overlap v-if="chatStore.unreadCount > 0">
         <v-icon :color="themeStore.theme === 'dark' ? '#A5D6A7' : '#28A745'">mdi-message-text</v-icon>
       </v-badge>
       <v-icon :color="themeStore.theme === 'dark' ? '#A5D6A7' : '#28A745'" v-else>mdi-message-text</v-icon>
@@ -66,42 +65,34 @@
 </template>
 
 <script setup>
-import { computed, onMounted, watch } from 'vue'
+import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useNuxtApp } from 'nuxt/app'
+import { useAuthStore } from '~/stores/auth'
 import { useChatStore } from '~/stores/chat'
 import { useThemeStore } from '~/stores/theme'
-import { useAuthStore } from '~/stores/auth'
 
-const { $websocket } = useNuxtApp()
+const { $emitter, $websocket } = useNuxtApp()
 const router = useRouter()
+const authStore = useAuthStore()
 const chatStore = useChatStore()
 const themeStore = useThemeStore()
-const authStore = useAuthStore()
-
-const isLoggedIn = computed(() => authStore.isLoggedIn)
-const role = computed(() => authStore.role || '')
 
 onMounted(() => {
-  authStore.initialize()
-  if (isLoggedIn.value) {
-    chatStore.connectWebSocket()
-    chatStore.fetchDialogs()
+  if (process.client) {
+    authStore.refresh() // Синхронизация состояния авторизации
+    if (authStore.isAuthenticated) {
+      chatStore.fetchDialogs()
+    }
+    $emitter.on('login', () => {
+      authStore.refresh()
+      if (authStore.isAuthenticated) {
+        chatStore.fetchDialogs()
+      }
+    })
+    $emitter.on('logout', () => {
+      authStore.logout()
+    })
   }
 })
-
-watch(isLoggedIn, (loggedIn) => {
-  if (loggedIn) {
-    chatStore.connectWebSocket()
-    chatStore.fetchDialogs()
-  } else {
-    $websocket.close()
-  }
-})
-
-const logout = () => {
-  authStore.clearUser()
-  $websocket.close()
-  router.push('/login')
-}
 </script>

@@ -24,23 +24,24 @@
                 />
               </v-list-item-avatar>
               <v-list-item-content class="py-0">
-                <v-list-item-title class="text-subtitle-2" style="font-size: 15px; font-weight: 500; color: #1f2a44; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" aria-label="Имя собеседника">
-                  {{ dialog.full_name || dialog.username || 'Без имени' }}
+                <v-list-item-title class="text-subtitle-2 d-flex align-center" style="font-size: 15px; font-weight: 500; color: #1f2a44;" aria-label="Имя собеседника">
+                  <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;">
+                    {{ dialog.full_name || dialog.username || 'Без имени' }}
+                  </span>
+                  <v-badge
+                    v-if="dialog.unread_count > 0"
+                    :content="dialog.unread_count"
+                    color="#EF4444"
+                    class="unread-badge ml-2"
+                    inline
+                    small
+                    aria-label="Количество непрочитанных сообщений"
+                  />
                 </v-list-item-title>
                 <v-list-item-subtitle class="text-caption" style="font-size: 12px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" aria-label="Последнее сообщение">
                   {{ dialog.last_message ? dialog.last_message.slice(0, 25) + (dialog.last_message.length > 25 ? '...' : '') : 'Нет сообщений' }}
                 </v-list-item-subtitle>
               </v-list-item-content>
-              <v-list-item-action class="ml-1">
-                <v-badge
-                  v-if="dialog.unread_count > 0"
-                  :content="dialog.unread_count"
-                  color="#EF4444"
-                  overlap
-                  small
-                  aria-label="Количество непрочитанных сообщений"
-                />
-              </v-list-item-action>
             </v-list-item>
           </v-list>
         </v-card>
@@ -170,14 +171,15 @@ function selectDialog(dialog) {
   line-height: 1.2;
   font-size: 15px;
   font-weight: 500;
+  display: flex;
+  align-items: center;
 }
 .v-list-item-subtitle {
   line-height: 1.2;
   margin-top: 4px;
   font-size: 12px;
 }
-.v-list-item-action {
-  margin-left: 8px;
-  min-width: 24px;
+.unread-badge {
+  transform: scale(0.8);
 }
 </style>

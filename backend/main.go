@@ -191,7 +191,7 @@ func main() {
 		AllowHeaders:     []string{"Authorization", "Content-Type"},
 		AllowCredentials: true,
 	}))
-	r.Static("/avatars", "./uploads/avatars")
+	r.Static("/avatars", "./Uploads/avatars")
 	api := r.Group("/api")
 	api.POST("/register", register)
 	api.POST("/login", login)
@@ -462,8 +462,8 @@ func uploadAvatarHandler(c *gin.Context) {
 		return
 	}
 	filename := uuid.New().String() + ".jpg"
-	path := "./uploads/avatars/" + filename
-	if err := os.MkdirAll("./uploads/avatars", os.ModePerm); err != nil {
+	path := "./Uploads/avatars/" + filename
+	if err := os.MkdirAll("./Uploads/avatars", os.ModePerm); err != nil {
 		log.Printf("uploadAvatar: Ошибка создания директории: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сервера"})
 		return
@@ -593,10 +593,22 @@ func createPayment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
 		return
 	}
+	var user User
+	if err := db.First(&user, userID).Error; err != nil {
+		log.Printf("createPayment: Пользователь не найден: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
+		return
+	}
 	var course Course
 	if err := db.First(&course, input.CourseID).Error; err != nil {
 		log.Printf("createPayment: Курс не найден: %v", err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "Курс не найден"})
+		return
+	}
+	var existingPayment Payment
+	if err := db.Where("user_id = ? AND course_id = ? AND status = ?", userID, input.CourseID, "paid").First(&existingPayment).Error; err == nil {
+		log.Printf("createPayment: Платеж за курс %d уже существует для пользователя %d", input.CourseID, userID)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Вы уже оплатили этот курс"})
 		return
 	}
 	grossAmount := course.GrossPrice
@@ -609,6 +621,7 @@ func createPayment(c *gin.Context) {
 		Commission:  commission,
 		NetAmount:   netAmount,
 		Status:      "pending",
+		CreatedAt:   time.Now(),
 	}
 	if err := db.Create(&payment).Error; err != nil {
 		log.Printf("createPayment: Ошибка создания платежа: %v", err)
@@ -617,28 +630,52 @@ func createPayment(c *gin.Context) {
 	}
 	shopID := os.Getenv("SHOP_ID")
 	secretKey := os.Getenv("SECRET_KEY")
+	if shopID == "" || secretKey == "" {
+		log.Println("createPayment: Отсутствуют SHOP_ID или SECRET_KEY")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка конфигурации платежной системы"})
+		return
+	}
 	apiURL := "https://api.yookassa.ru/v3/payments"
 	body := map[string]interface{}{
-		"amount": map[string]string{
+		"amount": map[string]interface{}{
 			"value":    grossAmount.StringFixed(2),
 			"currency": "RUB",
 		},
-		"confirmation": map[string]string{
+		"confirmation": map[string]interface{}{
 			"type":       "redirect",
 			"return_url": "http://localhost:3000/return?payment_id=" + strconv.Itoa(payment.ID),
 		},
 		"capture":     true,
 		"description": "Оплата услуги " + course.Title,
+		"metadata": map[string]interface{}{
+			"payment_id": payment.ID,
+		},
+		"receipt": map[string]interface{}{
+			"customer": map[string]interface{}{
+				"email": user.Email,
+			},
+			"items": []map[string]interface{}{
+				{
+					"description": course.Title,
+					"quantity":    "1.00",
+					"amount": map[string]interface{}{
+						"value":    grossAmount.StringFixed(2),
+						"currency": "RUB",
+					},
+					"vat_code": 1, // 1 = без НДС, изменить на 2 (10%) или 3 (20%) при необходимости
+				},
+			},
+		},
 	}
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
-		log.Printf("createPayment: Ошибка marshal body: %v", err)
+		log.Printf("createPayment: Ошибка сериализации тела запроса: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
 		return
 	}
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(bodyJSON))
 	if err != nil {
-		log.Printf("createPayment: Ошибка создания запроса: %v", err)
+		log.Printf("createPayment: Ошибка создания запроса к ЮKassa: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
 		return
 	}
@@ -648,30 +685,46 @@ func createPayment(c *gin.Context) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("createPayment: Ошибка запроса к ЮKassa: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
+		log.Printf("createPayment: Ошибка отправки запроса к ЮKassa: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка связи с платежной системой"})
 		return
 	}
 	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("createPayment: Ошибка чтения ответа ЮKassa: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки ответа платежной системы"})
+		return
+	}
 	if resp.StatusCode != http.StatusOK {
-		bodyErr, _ := io.ReadAll(resp.Body)
-		log.Printf("createPayment: Ошибка ЮKassa: status %d, body: %s", resp.StatusCode, string(bodyErr))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа в ЮKassa"})
+		log.Printf("createPayment: Ошибка ЮKassa: status %d, body: %s", resp.StatusCode, string(bodyBytes))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа в ЮKassa: " + string(bodyBytes)})
 		return
 	}
 	var yookassaResp map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&yookassaResp); err != nil {
+	if err := json.Unmarshal(bodyBytes, &yookassaResp); err != nil {
 		log.Printf("createPayment: Ошибка парсинга ответа ЮKassa: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки ответа платежной системы"})
 		return
 	}
 	payment.YookassaID = yookassaResp["id"].(string)
 	if err := db.Save(&payment).Error; err != nil {
 		log.Printf("createPayment: Ошибка сохранения YookassaID: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка создания платежа"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сохранения данных платежа"})
 		return
 	}
-	confirmationURL := yookassaResp["confirmation"].(map[string]interface{})["confirmation_url"].(string)
+	confirmation, ok := yookassaResp["confirmation"].(map[string]interface{})
+	if !ok {
+		log.Println("createPayment: Неверный формат confirmation в ответе ЮKassa")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки ответа платежной системы"})
+		return
+	}
+	confirmationURL, ok := confirmation["confirmation_url"].(string)
+	if !ok {
+		log.Println("createPayment: Отсутствует confirmation_url в ответе ЮKassa")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обработки ответа платежной системы"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"confirmation_url": confirmationURL, "payment_id": payment.ID})
 }
 
