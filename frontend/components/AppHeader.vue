@@ -87,16 +87,21 @@ onMounted(() => {
   }
 })
 
-const logout = () => {
+async function logout() {
+  console.log('AppHeader.vue: Выход из системы')
   if (process.client) {
+    try {
+      $websocket.close()
+      console.log('AppHeader.vue: WebSocket закрыт')
+    } catch (error) {
+      console.error('AppHeader.vue: Ошибка закрытия WebSocket:', error)
+    }
     localStorage.removeItem('token')
     localStorage.removeItem('role')
     localStorage.removeItem('userId')
-    $websocket.disconnect()
     $emitter.emit('logout')
+    await new Promise(resolve => setTimeout(resolve, 100)) // Задержка для завершения операций
+    router.push('/login')
   }
-  token.value = null
-  role.value = ''
-  router.push('/login')
 }
 </script>

@@ -13,7 +13,7 @@
     "firebase": "^10.12.2",
     "glob": "^10.4.5",
     "mitt": "^3.0.1",
-    "nuxt": "^4.0.1",
+    "nuxt": "^4.1.0",
     "pinia": "^3.0.3",
     "vuetify": "^3.9.4",
     "vuetify-nuxt-module": "^0.18.7"

@@ -8,7 +8,7 @@
             <v-btn 
               icon 
               @click="editMode = !editMode" 
-              v-if="!otherId" 
+              v-if="!otherId && role !== 'admin'" 
               v-tooltip="'Редактировать профиль'" 
               aria-label="Редактировать профиль"
             >
@@ -31,7 +31,7 @@
                 />
               </v-col>
             </v-row>
-            <v-form v-if="editMode" @submit.prevent="updateProfile">
+            <v-form v-if="editMode && role !== 'admin'" @submit.prevent="updateProfile">
               <v-text-field 
                 v-model="profile.full_name" 
                 label="Полное имя" 
@@ -65,102 +65,103 @@
                 <h3 style="font-size: 18px; color: #212529;" aria-label="Имя пользователя">{{ profile.full_name || profile.username || 'Имя не указано' }}</h3>
                 <p v-if="profile.role === 'nutri'" style="font-size: 15px; color: #6C757D;" aria-label="Роль пользователя">Роль: {{ profile.role === 'nutri' ? 'Нутрициолог' : 'Клиент' }}</p>
               </v-col>
-              <v-col cols="12" v-if="profile.role === 'nutri'">
+              <v-col cols="12" v-if="profile.role === 'nutri' && role !== 'admin'">
                 <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Услуги">Услуги</h4>
                 <p v-if="profile.description" style="font-size: 15px; line-height: 1.5;" aria-label="Описание">{{ profile.description }}</p>
                 <p v-else style="font-size: 15px; color: #6C757D;" aria-label="Описание не указано">Описание не указано</p>
               </v-col>
-              <v-col cols="12" v-if="role === 'nutri' && !otherId">
-                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Баланс">Баланс: {{ profile.balance || 0 }} руб.</h4>
+              <v-col cols="12" v-if="isNutri && !otherId && role !== 'admin'">
+                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Баланс">Баланс: {{ profile.balance }} руб.</h4>
               </v-col>
-              <v-col cols="12" v-if="role === 'nutri' && !otherId">
-                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Реквизиты">Реквизиты</h4>
+              <v-col cols="12" v-if="isNutri && !otherId && role !== 'admin'">
+                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Форма для карты">Форма для карты</h4>
                 <v-form @submit.prevent="updateCard">
-                  <v-text-field 
-                    v-model="cardNumber" 
-                    label="Номер карты" 
-                    type="text" 
-                    :rules="[v => v && v.length === 16 && /^\d+$/.test(v) || 'Номер карты: 16 цифр']" 
-                    aria-label="Номер карты" 
+                  <v-text-field
+                    v-model="cardNumber"
+                    label="Номер карты"
+                    type="text"
+                    :rules="[v => !!v || 'Номер карты обязателен', v => v.length === 16 || 'Должно быть 16 цифр', v => /^\d{16}$/.test(v) || 'Только цифры']"
+                    required
+                    aria-label="Номер карты"
                   />
-                  <v-btn color="primary" type="submit" aria-label="Обновить карту" :disabled="loading">Обновить карту</v-btn>
+                  <v-btn 
+                    color="primary" 
+                    type="submit" 
+                    v-tooltip="'Обновить карту'" 
+                    aria-label="Обновить карту"
+                    :disabled="loading"
+                  >
+                    Обновить карту
+                  </v-btn>
                 </v-form>
               </v-col>
-              <v-col cols="12">
-                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Услуги">Услуги</h4>
-                <v-row v-if="courses.length > 0" class="mt-4">
-                  <v-col v-for="course in sortedCourses" :key="course.id" cols="12" sm="6" md="4">
-                    <NuxtLink :to="`/courses/${course.id}`" style="text-decoration: none; display: block;">
-                      <v-card 
-                        class="pa-4" 
-                        style="border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-                        aria-label="Карточка услуги"
-                      >
-                        <v-card-title class="text-h6" style="font-size: 18px; color: #212529;" aria-label="Название услуги">{{ course.title }}</v-card-title>
-                        <v-card-subtitle style="font-size: 15px; color: #6C757D;" aria-label="Описание услуги">{{ course.description ? course.description.substring(0, 50) + '...' : 'Нет описания' }}</v-card-subtitle>
-                        <div style="font-size: 16px; color: #28A745; font-weight: bold;" aria-label="Цена услуги">
-                          Чистая: {{ course.net_price }} руб., Итоговая: {{ course.gross_price }} руб.
-                        </div>
-                      </v-card>
-                    </NuxtLink>
-                  </v-col>
-                </v-row>
-                <p v-else aria-label="Нет услуг">Нет услуг</p>
-                <v-btn 
-                  v-if="role === 'nutri' && !otherId" 
-                  color="primary" 
-                  to="/courses/create" 
-                  block 
-                  class="mt-4" 
-                  v-tooltip="'Создать новую услугу'" 
-                  aria-label="Создать услугу"
-                >
-                  Создать услугу
-                </v-btn>
-              </v-col>
-              <v-col cols="12" v-if="role === 'client' && !otherId">
-                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Записанные услуги">Записанные услуги</h4>
-                <v-row v-if="enrolled.length > 0">
-                  <v-col v-for="course in enrolled" :key="course.id" cols="12" sm="6" md="4">
-                    <NuxtLink :to="`/courses/${course.id}`" style="text-decoration: none; display: block;">
-                      <v-card 
-                        class="pa-4" 
-                        style="border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-                        aria-label="Карточка записанной услуги"
-                      >
-                        <v-card-title class="text-h6" style="font-size: 18px;" aria-label="Название услуги">{{ course.course?.title || 'Без названия' }}</v-card-title>
-                        <v-card-subtitle style="font-size: 15px;" aria-label="Описание услуги">{{ course.course?.description ? course.course.description.substring(0, 50) + '...' : 'Нет описания' }}</v-card-subtitle>
-                      </v-card>
-                    </NuxtLink>
-                  </v-col>
-                </v-row>
-                <p v-else aria-label="Нет записей">Нет записей</p>
-              </v-col>
-              <v-col cols="12">
-                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Отзывы">Отзывы</h4>
-                <v-list v-if="reviews.length > 0" aria-label="Список отзывов">
-                  <v-list-item v-for="(review, i) in reviews" :key="i">
+              <v-col cols="12" v-if="role === 'client' && role !== 'admin'">
+                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Записи клиента">Мои записи</h4>
+                <v-list v-if="enrolled.length > 0" aria-label="Список записей">
+                  <v-list-item v-for="enrollment in enrolled" :key="enrollment.id" @click="goToCourse(enrollment.course_id)" style="cursor: pointer;">
                     <v-list-item-content>
-                      <v-list-item-title aria-label="Содержание отзыва">{{ review.content }}</v-list-item-title>
-                      <v-list-item-subtitle aria-label="Автор отзыва">{{ review.author?.full_name || review.author?.username || 'Аноним' }}</v-list-item-subtitle>
+                      <v-list-item-title aria-label="Название курса">{{ enrollment.course.title }}</v-list-item-title>
+                      <v-list-item-subtitle aria-label="Дата записи">{{ formatDate(enrollment.created_at) }}</v-list-item-subtitle>
                     </v-list-item-content>
                   </v-list-item>
                 </v-list>
-                <p v-else aria-label="Нет отзывов">Нет отзывов</p>
+                <p v-else style="font-size: 15px; color: #6C757D;" aria-label="Нет записей">Нет записей</p>
               </v-col>
-              <v-col cols="12" v-if="otherId && isLoggedIn">
-                <v-btn 
-                  color="primary" 
-                  block 
-                  @click="openChat" 
-                  v-tooltip="'Открыть чат'" 
-                  aria-label="Открыть чат"
-                >
-                  Открыть чат
-                </v-btn>
+              <v-col cols="12" v-if="isNutri && !otherId && role !== 'admin'">
+                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Мои курсы">Мои курсы</h4>
+                <v-btn color="#28A745" to="/courses/create" v-tooltip="'Создать курс'" aria-label="Создать новый курс">Создать курс</v-btn>
+                <v-list v-if="courses.length > 0" aria-label="Список курсов">
+                  <v-list-item v-for="course in courses" :key="course.id" @click="goToCourse(course.id)" style="cursor: pointer;">
+                    <v-list-item-content>
+                      <v-list-item-title aria-label="Название курса">{{ course.title }}</v-list-item-title>
+                      <v-list-item-subtitle aria-label="Чистая цена">Чистая: {{ course.net_price }} руб., Итоговая: {{ course.gross_price }} руб. (вкл. комиссия)</v-list-item-subtitle>
+                    </v-list-item-content>
+                  </v-list-item>
+                </v-list>
+                <p v-else style="font-size: 15px; color: #6C757D;" aria-label="Нет курсов">Нет курсов</p>
+              </v-col>
+              <v-col cols="12" v-if="otherId && role !== 'admin'">
+                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Курсы нутрициолога">Курсы нутрициолога</h4>
+                <v-list v-if="courses.length > 0" aria-label="Список курсов">
+                  <v-list-item v-for="course in sortedCourses" :key="course.id" @click="goToCourse(course.id)" style="cursor: pointer;">
+                    <v-list-item-content>
+                      <v-list-item-title aria-label="Название курса">{{ course.title }}</v-list-item-title>
+                      <v-list-item-subtitle aria-label="Стоимость">{{ displayedPrice(course) }} руб.</v-list-item-subtitle>
+                    </v-list-item-content>
+                  </v-list-item>
+                </v-list>
+                <p v-else style="font-size: 15px; color: #6C757D;" aria-label="Нет курсов">Нет курсов</p>
+              </v-col>
+              <v-col cols="12" v-if="role !== 'admin'">
+                <h4 style="font-size: 16px; color: #2E7D32;" aria-label="Отзывы">Отзывы</h4>
+                <v-row v-if="reviews.length > 0" class="mt-4">
+                  <v-col v-for="(review, i) in reviews" :key="i" cols="12">
+                    <v-card flat class="pa-3" style="border-radius: 8px; border: 1px solid #e0e0e0;">
+                      <v-card-text style="font-size: 14px; color: #212529;">
+                        "{{ review.content }}" — {{ review.author ? review.author.full_name : 'Аноним' }}
+                      </v-card-text>
+                    </v-card>
+                  </v-col>
+                </v-row>
+                <p v-else style="font-size: 15px; color: #6C757D;" aria-label="Нет отзывов">Нет отзывов</p>
+              </v-col>
+              <v-col cols="12" v-if="role === 'admin' && !otherId">
+                <v-btn color="primary" @click="goToAdmin" aria-label="Управление выплатами">Управление выплатами</v-btn>
               </v-col>
             </v-row>
           </v-card-text>
+          <v-card-actions v-if="isLoggedIn && otherId && userId !== otherId" class="justify-center pa-4">
+            <v-btn 
+              color="#28A745" 
+              variant="outlined" 
+              @click="openChat" 
+              v-tooltip="'Открыть чат'" 
+              aria-label="Открыть чат"
+            >
+              <v-icon left>mdi-message-text</v-icon>
+              Связаться
+            </v-btn>
+          </v-card-actions>
         </v-card>
       </v-col>
     </v-row>
@@ -169,7 +170,8 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute, useRouter, useRuntimeConfig } from 'nuxt/app'
+import { useRoute, useRouter } from 'vue-router'
+import { useRuntimeConfig } from 'nuxt/app'
 import { useChatStore } from '~/stores/chat'
 
 const config = useRuntimeConfig()
@@ -178,61 +180,85 @@ const router = useRouter()
 const chatStore = useChatStore()
 const profile = ref({})
 const courses = ref([])
-const enrolled = ref([])
 const reviews = ref([])
-const editMode = ref(false)
-const cardNumber = ref('')
-const avatarFile = ref(null)
-const errorMessage = ref('')
+const enrolled = ref([])
 const token = ref(null)
 const role = ref('')
 const userId = ref(null)
-const otherId = ref(route.params.id || null)
+const otherId = ref(null)
+const isLoggedIn = ref(false)
+const editMode = ref(false)
+const avatarFile = ref(null)
+const cardNumber = ref('')
 const loading = ref(false)
-const isLoggedIn = computed(() => !!token.value)
-
-const sortedCourses = computed(() => [...courses.value].sort((a, b) => a.title.localeCompare(b.title) || a.id - b.id))
+const errorMessage = ref('')
 
 onMounted(async () => {
   if (process.client) {
     token.value = localStorage.getItem('token')
-    role.value = localStorage.getItem('role')
+    role.value = localStorage.getItem('role') || ''
     userId.value = localStorage.getItem('userId') ? parseInt(localStorage.getItem('userId')) : null
-    chatStore.connectWebSocket()
+    isLoggedIn.value = !!token.value
+    otherId.value = route.params.id ? parseInt(route.params.id) : null
+    console.log('Profile.vue mounted, role:', role.value, 'userId:', userId.value, 'otherId:', otherId.value)
+    if (!token.value) {
+      console.log('Profile.vue: Нет токена, редирект на /login')
+      router.push('/login')
+      return
+    }
   }
   await loadProfile()
 })
 
 watch(() => route.params.id, async (newId) => {
-  otherId.value = newId || null
+  otherId.value = newId ? parseInt(newId) : null
+  console.log('Profile.vue: Изменен otherId:', otherId.value)
   await loadProfile()
 })
 
-async function loadProfile() {
+const isNutri = computed(() => role.value === 'nutri')
+const sortedCourses = computed(() => courses.value.sort((a, b) => a.title.localeCompare(b.title)))
+
+const displayedPrice = (course) => {
+  return isNutri.value ? `Чистая: ${course.net_price} руб., Итоговая: ${course.gross_price} руб.` : course.gross_price
+}
+
+const formatDate = (date) => new Date(date).toLocaleDateString('ru-RU')
+
+const goToCourse = (id) => {
+  console.log('Profile.vue: Переход на курс:', id)
+  router.push(`/courses/${id}`)
+}
+
+const goToAdmin = () => {
+  console.log('Profile.vue: Нажата кнопка Управление выплатами, переход на /admin')
+  router.push('/admin')
+}
+
+const loadProfile = async () => {
   loading.value = true
   const headers = token.value ? { Authorization: `Bearer ${token.value}` } : {}
-  const path = otherId.value ? `/api/profile/${otherId.value}` : '/api/profile'
+  const endpoint = otherId.value ? `/api/profile/${otherId.value}` : '/api/profile'
   try {
-    const data = await $fetch(`${config.public.apiBase}${path}`, { headers })
+    console.log('Profile.vue: Загрузка профиля, endpoint:', endpoint)
+    const data = await $fetch(`${config.public.apiBase}${endpoint}`, { headers })
     profile.value = data.profile || {}
     courses.value = data.courses || []
     reviews.value = data.reviews || []
-    if (!profile.value.id) {
-      errorMessage.value = 'Данные профиля не загружены, проверьте базу данных'
-      console.log('loadProfile: Пустой профиль', data)
+    if (isLoggedIn.value && role.value === 'client') {
+      console.log('Profile.vue: Загрузка записей для клиента')
+      const enrollData = await $fetch(`${config.public.apiBase}/api/enrolled`, { headers })
+      enrolled.value = enrollData || []
     }
-    if (!otherId.value && role.value === 'client') {
-      const enrolledData = await $fetch(`${config.public.apiBase}/api/enrolled`, { headers })
-      enrolled.value = enrolledData || []
-    }
-    if (profile.value.id) {
+    if (process.client) {
       localStorage.setItem('profile_user_id', profile.value.id)
       localStorage.setItem('profile_avatar_url', profile.value.avatar_url || '')
     }
   } catch (error) {
-    console.log('loadProfile: Ошибка', error)
+    console.error('Profile.vue: Ошибка загрузки профиля:', error)
     errorMessage.value = 'Ошибка загрузки профиля: ' + (error.message || 'Неизвестная ошибка')
     if (error.status === 401) {
+      console.log('Profile.vue: 401 Unauthorized, удаление токена и редирект на /login')
       localStorage.removeItem('token')
       localStorage.removeItem('role')
       localStorage.removeItem('userId')
@@ -251,18 +277,21 @@ async function updateProfile() {
     description: profile.value.description
   }
   try {
+    console.log('Profile.vue: Обновление профиля, body:', body)
     await $fetch(`${config.public.apiBase}/api/profile`, { 
       method: 'PUT', 
       headers, 
       body 
     })
     if (avatarFile.value) {
+      console.log('Profile.vue: Загрузка аватара')
       await uploadAvatar()
     }
     editMode.value = false
     await loadProfile()
+    errorMessage.value = 'Профиль обновлен'
   } catch (error) {
-    console.log('updateProfile: Ошибка', error)
+    console.error('Profile.vue: Ошибка обновления профиля:', error)
     errorMessage.value = 'Ошибка обновления профиля: ' + (error.message || 'Неизвестная ошибка')
   } finally {
     loading.value = false
@@ -275,6 +304,7 @@ async function uploadAvatar() {
   const formData = new FormData()
   formData.append('avatar', avatarFile.value)
   try {
+    console.log('Profile.vue: Загрузка аватара')
     const response = await $fetch(`${config.public.apiBase}/api/profile/upload-avatar`, {
       method: 'POST',
       headers,
@@ -282,8 +312,8 @@ async function uploadAvatar() {
     })
     profile.value.avatar_url = response.profile?.avatar_url || profile.value.avatar_url
     errorMessage.value = 'Аватар загружен'
-    // Отправка WebSocket-уведомления
     if (chatStore.websocket && chatStore.websocket.readyState === WebSocket.OPEN) {
+      console.log('Profile.vue: Отправка WebSocket уведомления об обновлении аватара')
       chatStore.websocket.send(JSON.stringify({
         type: 'avatar_updated',
         data: {
@@ -294,7 +324,7 @@ async function uploadAvatar() {
     }
     avatarFile.value = null
   } catch (error) {
-    console.log('uploadAvatar: Ошибка', error)
+    console.error('Profile.vue: Ошибка загрузки аватара:', error)
     errorMessage.value = 'Ошибка загрузки аватара: ' + (error.message || 'Неизвестная ошибка')
   }
 }
@@ -304,16 +334,18 @@ async function updateCard() {
   const headers = { Authorization: `Bearer ${token.value}` }
   const body = { card_number: cardNumber.value }
   try {
+    console.log('Profile.vue: Обновление карты, card_number:', cardNumber.value)
     await $fetch(`${config.public.apiBase}/api/profile/update-card`, { 
       method: 'POST', 
       headers, 
       body 
     })
-    errorMessage.value = 'Карта обновлена'
+    errorMessage.value = 'Карта обновлена успешно'
     cardNumber.value = ''
+    await loadProfile()
   } catch (error) {
-    console.log('updateCard: Ошибка', error)
-    errorMessage.value = 'Ошибка обновления карты: ' + (error.message || 'Неизвестная ошибка')
+    console.error('Profile.vue: Ошибка обновления карты:', error)
+    errorMessage.value = 'Ошибка обновления карты: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
   } finally {
     loading.value = false
   }
@@ -321,10 +353,12 @@ async function updateCard() {
 
 async function openChat() {
   if (!isLoggedIn.value) {
+    console.log('Profile.vue: Пользователь не авторизован, редирект на /login')
     router.push('/login')
     return
   }
   try {
+    console.log('Profile.vue: Открытие чата с receiver_id:', profile.value.id)
     const headers = { Authorization: `Bearer ${token.value}` }
     const data = await $fetch(`${config.public.apiBase}/api/start-chat`, {
       method: 'POST',
@@ -333,7 +367,7 @@ async function openChat() {
     })
     router.push(`/chats?selected=${data.receiver_id}`)
   } catch (error) {
-    console.log('openChat: Ошибка', error)
+    console.error('Profile.vue: Ошибка открытия чата:', error)
     errorMessage.value = 'Ошибка открытия чата: ' + (error.message || 'Неизвестная ошибка')
   }
 }

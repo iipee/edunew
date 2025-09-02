@@ -73,6 +73,7 @@ type User struct {
 	Services      StringArray     `json:"services" gorm:"type:jsonb"`
 	Balance       decimal.Decimal `json:"balance" gorm:"type:decimal(10,2);default:0"`
 	EncryptedCard string          `json:"encrypted_card"`
+	PayoutAmount  decimal.Decimal `json:"payout_amount" gorm:"type:decimal(10,2);default:0"`
 	CreatedAt     time.Time       `json:"created_at" gorm:"autoCreateTime"`
 }
 
@@ -163,6 +164,8 @@ func main() {
 		log.Fatalf("Ошибка миграции БД: %v", err)
 	}
 	log.Println("Database migration completed")
+
+	// Проверка и создание тестового нутрициолога
 	var count int64
 	if err := db.Model(&User{}).Where("role = ?", "nutri").Count(&count).Error; err != nil {
 		log.Printf("Ошибка проверки тестового нутрициолога: %v", err)
@@ -184,6 +187,28 @@ func main() {
 			log.Println("Создан тестовый нутрициолог")
 		}
 	}
+
+	// Проверка и создание учетной записи администратора
+	var adminCount int64
+	if err := db.Model(&User{}).Where("username = ?", "adminis").Count(&adminCount).Error; err != nil {
+		log.Printf("Ошибка проверки администратора: %v", err)
+	}
+	if adminCount == 0 {
+		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("Cl33l2l4jswi98"), bcrypt.DefaultCost)
+		admin := User{
+			Username: "adminis",
+			Email:    "admin@example.com",
+			Password: string(hashedPassword),
+			Role:     "admin",
+			FullName: "Администратор",
+		}
+		if err := db.Create(&admin).Error; err != nil {
+			log.Printf("Ошибка создания администратора: %v", err)
+		} else {
+			log.Println("Создан администратор")
+		}
+	}
+
 	r = gin.Default()
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:3000"},
@@ -218,6 +243,10 @@ func main() {
 	api.GET("/messages", authMiddleware, getMessages)
 	api.POST("/messages", authMiddleware, sendMessage)
 	api.PUT("/messages/read", authMiddleware, markRead)
+	api.GET("/admin/nutris", authMiddleware, getAdminNutris)
+	api.POST("/admin/decrypt-card", authMiddleware, decryptCard)
+	api.POST("/admin/payout", authMiddleware, processPayout)
+	api.POST("/admin/update-payout-amount", authMiddleware, updatePayoutAmount)
 	r.GET("/ws", handleWebSocket)
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -662,7 +691,7 @@ func createPayment(c *gin.Context) {
 						"value":    grossAmount.StringFixed(2),
 						"currency": "RUB",
 					},
-					"vat_code": 1, // 1 = без НДС, изменить на 2 (10%) или 3 (20%) при необходимости
+					"vat_code": 1,
 				},
 			},
 		},
@@ -1010,6 +1039,168 @@ func getNutris(c *gin.Context) {
 	}
 	log.Printf("Возвращено %d нутрициологов", len(nutris))
 	c.JSON(http.StatusOK, nutris)
+}
+
+func getAdminNutris(c *gin.Context) {
+	role := c.GetString("role")
+	if role != "admin" {
+		log.Println("getAdminNutris: Доступ запрещён")
+		c.JSON(http.StatusForbidden, gin.H{"error": "Доступ только для администраторов"})
+		return
+	}
+	var nutris []User
+	if err := db.Where("role = ?", "nutri").Find(&nutris).Error; err != nil {
+		log.Printf("getAdminNutris: Ошибка получения нутрициологов: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения нутрициологов"})
+		return
+	}
+	log.Printf("Возвращено %d нутрициологов для администратора", len(nutris))
+	c.JSON(http.StatusOK, nutris)
+}
+
+func decryptCard(c *gin.Context) {
+	role := c.GetString("role")
+	if role != "admin" {
+		log.Println("decryptCard: Доступ запрещён")
+		c.JSON(http.StatusForbidden, gin.H{"error": "Доступ только для администраторов"})
+		return
+	}
+	var input struct {
+		UserID int `json:"user_id"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		log.Printf("decryptCard: Неверные данные: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
+		return
+	}
+	var user User
+	if err := db.First(&user, input.UserID).Error; err != nil {
+		log.Printf("decryptCard: Пользователь не найден: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
+		return
+	}
+	if user.EncryptedCard == "" {
+		log.Println("decryptCard: Карта не указана")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Карта не указана"})
+		return
+	}
+	key, err := hex.DecodeString(os.Getenv("AES_KEY"))
+	if err != nil {
+		log.Printf("decryptCard: Ошибка декодирования ключа AES: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка расшифровки"})
+		return
+	}
+	ciphertext, err := hex.DecodeString(user.EncryptedCard)
+	if err != nil {
+		log.Printf("decryptCard: Ошибка декодирования карты: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка расшифровки"})
+		return
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		log.Printf("decryptCard: Ошибка создания шифра: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка расшифровки"})
+		return
+	}
+	if len(ciphertext) < aes.BlockSize {
+		log.Println("decryptCard: Неверный размер ciphertext")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка расшифровки"})
+		return
+	}
+	iv := ciphertext[:aes.BlockSize]
+	ciphertext = ciphertext[aes.BlockSize:]
+	if len(ciphertext)%aes.BlockSize != 0 {
+		log.Println("decryptCard: Неверный размер ciphertext")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка расшифровки"})
+		return
+	}
+	mode := cipher.NewCBCDecrypter(block, iv)
+	plaintext := make([]byte, len(ciphertext))
+	mode.CryptBlocks(plaintext, ciphertext)
+	plaintext = bytes.TrimRight(plaintext, "\x00")
+	c.JSON(http.StatusOK, gin.H{"card_number": string(plaintext)})
+}
+
+func processPayout(c *gin.Context) {
+	role := c.GetString("role")
+	if role != "admin" {
+		log.Println("processPayout: Доступ запрещён")
+		c.JSON(http.StatusForbidden, gin.H{"error": "Доступ только для администраторов"})
+		return
+	}
+	var input struct {
+		UserID int             `json:"user_id"`
+		Amount decimal.Decimal `json:"amount"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		log.Printf("processPayout: Неверные данные: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
+		return
+	}
+	var user User
+	if err := db.First(&user, input.UserID).Error; err != nil {
+		log.Printf("processPayout: Пользователь не найден: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
+		return
+	}
+	if input.Amount.LessThanOrEqual(decimal.Zero) {
+		log.Println("processPayout: Сумма должна быть больше 0")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Сумма должна быть больше 0"})
+		return
+	}
+	if input.Amount.GreaterThan(user.Balance) {
+		log.Println("processPayout: Недостаточно средств на балансе")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Недостаточно средств на балансе"})
+		return
+	}
+	if err := db.Model(&user).Update("balance", gorm.Expr("balance - ?", input.Amount)).Error; err != nil {
+		log.Printf("processPayout: Ошибка списания баланса: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка списания баланса"})
+		return
+	}
+	if err := db.Model(&user).Update("payout_amount", gorm.Expr("payout_amount + ?", input.Amount)).Error; err != nil {
+		log.Printf("processPayout: Ошибка обновления выплаченной суммы: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления выплаченной суммы"})
+		return
+	}
+	log.Printf("Инициирована выплата %s руб. для пользователя %d", input.Amount.StringFixed(2), input.UserID)
+	c.JSON(http.StatusOK, gin.H{"message": "Выплата инициирована"})
+}
+
+func updatePayoutAmount(c *gin.Context) {
+	role := c.GetString("role")
+	if role != "admin" {
+		log.Println("updatePayoutAmount: Доступ запрещён")
+		c.JSON(http.StatusForbidden, gin.H{"error": "Доступ только для администраторов"})
+		return
+	}
+	var input struct {
+		UserID       int             `json:"user_id"`
+		PayoutAmount decimal.Decimal `json:"payout_amount"`
+	}
+	if err := c.BindJSON(&input); err != nil {
+		log.Printf("updatePayoutAmount: Неверные данные: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Неверные данные"})
+		return
+	}
+	var user User
+	if err := db.First(&user, input.UserID).Error; err != nil {
+		log.Printf("updatePayoutAmount: Пользователь не найден: %v", err)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Пользователь не найден"})
+		return
+	}
+	if input.PayoutAmount.LessThan(decimal.Zero) {
+		log.Println("updatePayoutAmount: Выплаченная сумма не может быть отрицательной")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Выплаченная сумма не может быть отрицательной"})
+		return
+	}
+	if err := db.Model(&user).Update("payout_amount", input.PayoutAmount).Error; err != nil {
+		log.Printf("updatePayoutAmount: Ошибка обновления выплаченной суммы: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления выплаченной суммы"})
+		return
+	}
+	log.Printf("Обновлена выплаченная сумма %s руб. для пользователя %d", input.PayoutAmount.StringFixed(2), input.UserID)
+	c.JSON(http.StatusOK, gin.H{"message": "Выплаченная сумма обновлена"})
 }
 
 func startChat(c *gin.Context) {

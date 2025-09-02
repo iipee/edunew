@@ -19,11 +19,12 @@
                 <v-list-item-action>
                   <v-btn 
                     color="#28A745" 
+                    :disabled="course.is_paid" 
                     @click="orderCourse(course)" 
-                    v-tooltip="'Записаться'" 
+                    v-tooltip="course.is_paid ? 'Курс уже оплачен' : 'Записаться'" 
                     aria-label="Записаться на услугу"
                   >
-                    Записаться
+                    {{ course.is_paid ? 'Оплачено' : 'Записаться' }}
                   </v-btn>
                 </v-list-item-action>
               </v-list-item>
@@ -43,11 +44,14 @@
 import { ref, onMounted } from 'vue'
 import { useRuntimeConfig } from 'nuxt/app'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '~/stores/auth'
 
 const config = useRuntimeConfig()
 const router = useRouter()
+const authStore = useAuthStore()
 const courses = ref([])
 const token = ref(null)
+const userId = ref(null)
 const errorMessage = ref('')
 const snackbar = ref(false)
 const snackbarText = ref('')
@@ -56,6 +60,7 @@ const snackbarColor = ref('success')
 onMounted(async () => {
   if (process.client) {
     token.value = localStorage.getItem('token')
+    userId.value = localStorage.getItem('userId') ? parseInt(localStorage.getItem('userId')) : null
   }
   if (!token.value) {
     errorMessage.value = 'Требуется авторизация'
@@ -63,17 +68,27 @@ onMounted(async () => {
     return
   }
   const headers = { Authorization: `Bearer ${token.value}` }
-  const { data, error } = await useFetch(`${config.public.apiBase}/api/courses`, { headers })
-  if (error.value) {
-    errorMessage.value = 'Ошибка загрузки услуг: ' + (error.value.data?.error || 'Неизвестная ошибка')
-    return
+  try {
+    const data = await $fetch(`${config.public.apiBase}/api/courses`, { headers })
+    const paymentStatus = await $fetch(`${config.public.apiBase}/api/payments/status`, { headers })
+    courses.value = data.map(course => ({
+      ...course,
+      is_paid: paymentStatus.some(status => status.course_id === course.id && status.user_id === userId.value)
+    })) || []
+  } catch (error) {
+    errorMessage.value = 'Ошибка загрузки услуг: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
   }
-  courses.value = data.value || []
 })
 
 const orderCourse = async (course) => {
   if (!token.value) {
     router.push('/login')
+    return
+  }
+  if (course.is_paid) {
+    snackbarText.value = 'Курс уже оплачен'
+    snackbarColor.value = 'info'
+    snackbar.value = true
     return
   }
   const headers = { Authorization: `Bearer ${token.value}` }

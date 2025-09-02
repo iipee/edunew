@@ -91,27 +91,6 @@
           </v-row>
         </v-col>
       </v-row>
-      <v-row class="mt-12">
-        <v-col cols="12">
-          <h2 class="text-h4 text-center mb-8" style="color: #2E7D32;" aria-label="Отзывы">Отзывы</h2>
-          <v-carousel height="300" hide-delimiter-background show-arrows-on-hover>
-            <v-carousel-item v-for="review in reviews" :key="review.id" aria-label="Отзыв">
-              <v-sheet height="100%" tile>
-                <v-row class="fill-height" align="center" justify="center">
-                  <v-col cols="8">
-                    <p class="text-center text-h6" style="font-size: 18px; line-height: 1.5;" aria-label="Содержание отзыва">
-                      "{{ review.content }}"
-                    </p>
-                    <p class="text-center mt-4" style="font-size: 16px; color: #6C757D;" aria-label="Автор отзыва">
-                      - Пользователь #{{ review.author_id }}
-                    </p>
-                  </v-col>
-                </v-row>
-              </v-sheet>
-            </v-carousel-item>
-          </v-carousel>
-        </v-col>
-      </v-row>
       <v-snackbar v-model="snackbar" color="error" timeout="3000" aria-label="Уведомление об ошибке">
         {{ errorMessage }}
       </v-snackbar>
@@ -125,7 +104,6 @@ import { useRuntimeConfig } from 'nuxt/app'
 
 const config = useRuntimeConfig()
 const recommended = ref([])
-const reviews = ref([])
 const loading = ref(true)
 const snackbar = ref(false)
 const errorMessage = ref('')
@@ -141,10 +119,6 @@ onMounted(async () => {
       errorMessage.value = 'Нет доступных нутрициологов'
       snackbar.value = true
     }
-    const reviewData = await $fetch(`${config.public.apiBase}/api/reviews/random`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-    })
-    reviews.value = reviewData || []
   } catch (error) {
     errorMessage.value = 'Ошибка загрузки данных: ' + (error.message || 'Неизвестная ошибка')
     snackbar.value = true
