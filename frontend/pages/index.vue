@@ -52,7 +52,8 @@
                   :src="nutri.avatar_url || '/images/nutri-placeholder.jpg'"
                   width="150"
                   height="150"
-                  class="mx-auto rounded-circle"
+                  class="mx-auto"
+                  style="border-radius: 0;"
                   aria-label="Фото нутрициолога"
                   @error="onImageError"
                 >

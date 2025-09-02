@@ -6,7 +6,7 @@
     </v-main>
     <v-footer color="primary" :dark="themeStore.theme === 'dark'" class="text-center" style="border-top: 1px solid #CED4DA; padding: 16px; position: relative;">
       <v-col cols="12">
-        practice © 2025 | <NuxtLink to="/">Главная</NuxtLink> | <NuxtLink to="/search">Поиск</NuxtLink> | <NuxtLink to="/profile">Профиль</NuxtLink>
+        Practice © 2025 | <NuxtLink to="/">Главная</NuxtLink> | <NuxtLink to="/search">Поиск</NuxtLink> | <NuxtLink to="/profile">Профиль</NuxtLink>
       </v-col>
     </v-footer>
   </v-app>
