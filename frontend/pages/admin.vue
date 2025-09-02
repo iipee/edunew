@@ -1,4 +1,3 @@
-<!-- pages/admin.vue -->
 <template>
     <v-container>
       <v-row justify="center">
@@ -17,6 +16,7 @@
                 :sort-by="[{ key: 'balance', order: 'desc' }]"
                 :loading="loading"
                 aria-label="Таблица нутрициологов"
+                no-data-text="Нет доступных данных"
               >
                 <template v-slot:item.full_name="{ item }">
                   {{ item.full_name || 'Не указано' }}
@@ -35,50 +35,30 @@
                     v-model.number="payoutAmounts[item.id]"
                     label="Сумма выплаты"
                     type="number"
-                    :rules="[v => v >= 0 && v <= item.balance || 'Неверная сумма']"
+                    :rules="[v => v >= 0 || 'Сумма не может быть отрицательной']"
                     dense
                     outlined
                     aria-label="Сумма выплаты"
                   />
                   <v-btn 
                     color="primary" 
-   Rosanne B. 4:08 PM
                     small 
+                    :disabled="payoutAmounts[item.id] <= 0"
                     @click="processPayout(item.id)" 
-                    v-tooltip="'Выплатить'" 
+                    v-tooltip="'Выплатить'"
                     aria-label="Выплатить"
-                    :disabled="payoutAmounts[item.id] > item.balance || payoutAmounts[item.id] <= 0"
                   >
                     Выплатить
-                  </v-btn>
-                  <v-text-field
-                    v-model.number="payoutPaidAmounts[item.id]"
-                    label="Выплачено"
-                    type="number"
-                    :rules="[v => v >= 0 || 'Сумма не может быть отрицательной']"
-                    dense
-                    outlined
-                    aria-label="Сумма выплачено"
-                  />
-                  <v-btn 
-                    color="success" 
-                    small 
-                    @click="updatePayoutAmount(item.id)" 
-                    v-tooltip="'Обновить выплаченную сумму'" 
-                    aria-label=" Updating the paid amount"
-                    :disabled="payoutPaidAmounts[item.id] < 0"
-                  >
-                    Обновить
                   </v-btn>
                   <v-btn 
                     color="secondary" 
                     small 
                     @click="decryptCard(item.id)" 
-                    v-tooltip="'Показать карту'" 
-                    aria-label="Показать карту"
-                    :disabled="!item.encrypted_card || item.encrypted_card === 'Не указана' || item.encrypted_card === 'Ошибка расшифровки'"
+                    v-tooltip="'Расшифровать карту'"
+                    aria-label="Расшифровать карту"
+                    :disabled="!item.encrypted_card"
                   >
-                    Показать карту
+                    Расшифровать
                   </v-btn>
                 </template>
               </v-data-table>
@@ -94,35 +74,27 @@
   
   <script setup>
   import { ref, onMounted } from 'vue'
-  import { useRouter } from 'vue-router'
   import { useRuntimeConfig } from 'nuxt/app'
   
   definePageMeta({ middleware: 'admin' })
   
   const config = useRuntimeConfig()
-  const router = useRouter()
-  const nutris = ref([])
-  const payoutAmounts = ref({})
-  const payoutPaidAmounts = ref({})
-  const loading = ref(true)
+  const loading = ref(false)
   const errorMessage = ref('')
   const snackbar = ref(false)
   const snackbarText = ref('')
   const snackbarColor = ref('success')
+  const nutris = ref([])
+  const payoutAmounts = ref({})
   const headers = [
-    { title: 'ФИО', key: 'full_name' },
-    { title: 'Баланс', key: 'balance' },
-    { title: 'Выплачено', key: 'payout_amount' },
-    { title: 'Карта', key: 'encrypted_card' },
-    { title: 'Действия', key: 'actions', sortable: false }
+    { title: 'Имя', key: 'full_name', align: 'start' },
+    { title: 'Баланс', key: 'balance', align: 'center' },
+    { title: 'Выплачено', key: 'payout_amount', align: 'center' },
+    { title: 'Карта', key: 'encrypted_card', align: 'center' },
+    { title: 'Действия', key: 'actions', align: 'end', sortable: false }
   ]
   
   onMounted(async () => {
-    const token = localStorage.getItem('token')
-    if (!token || localStorage.getItem('role') !== 'admin') {
-      router.push('/login')
-      return
-    }
     await loadNutris()
   })
   
@@ -131,16 +103,15 @@
     const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` }
     try {
       const data = await $fetch(`${config.public.apiBase}/api/admin/nutris`, { headers })
+      console.log('admin.vue: Загружено нутрициологов:', data)
       nutris.value = data || []
       nutris.value.forEach(nutri => {
-        payoutAmounts.value[nutri.id] = 0
-        payoutPaidAmounts.value[nutri.id] = nutri.payout_amount || 0
+        payoutAmounts.value[nutri.id] = Number(nutri.payout_amount) || 0
       })
     } catch (error) {
-      errorMessage.value = 'Ошибка загрузки: ' + (error.message || 'Неизвестная ошибка')
-      snackbarText.value = errorMessage.value
-      snackbarColor.value = 'error'
-      snackbar.value = true
+      console.error('admin.vue: Ошибка загрузки нутрициологов:', error)
+      errorMessage.value = 'Ошибка загрузки нутрициологов: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
+      nutris.value = []
     } finally {
       loading.value = false
     }
@@ -148,55 +119,64 @@
   
   async function processPayout(userId) {
     const amount = payoutAmounts.value[userId]
-    if (amount <= 0) {
-      snackbarText.value = 'Сумма должна быть больше 0'
+    if (!amount || amount <= 0) {
+      snackbarText.value = 'Укажите корректную сумму выплаты'
       snackbarColor.value = 'error'
       snackbar.value = true
       return
     }
     const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` }
-    const body = { user_id: userId, amount }
     try {
-      const response = await $fetch(`${config.public.apiBase}/api/admin/payout`, { 
-        method: 'POST', 
-        headers, 
-        body 
+      await $fetch(`${config.public.apiBase}/api/admin/payout`, {
+        method: 'POST',
+        headers,
+        body: { user_id: userId, amount }
       })
-      snackbarText.value = `Выплата на ${amount} руб. инициирована. Выполните перевод вручную.`
+      // Локально обновляем баланс нутрициолога
+      nutris.value = nutris.value.map(nutri => {
+        if (nutri.id === userId) {
+          return { ...nutri, balance: nutri.balance - amount, payout_amount: (Number(nutri.payout_amount) || 0) + amount }
+        }
+        return nutri
+      })
+      // Очищаем поле ввода суммы
+      payoutAmounts.value[userId] = 0
+      snackbarText.value = `Выплата ${amount} руб. успешно обработана`
       snackbarColor.value = 'success'
       snackbar.value = true
-      // Обновляем payout_amount
-      await updatePayoutAmount(userId, amount)
+      // Синхронизируем данные с сервером
       await loadNutris()
     } catch (error) {
-      snackbarText.value = 'Ошибка выплаты: ' + (error.message || 'Неизвестная ошибка')
+      console.error('admin.vue: Ошибка выплаты:', error)
+      snackbarText.value = 'Ошибка выплаты: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
       snackbarColor.value = 'error'
       snackbar.value = true
     }
   }
   
-  async function updatePayoutAmount(userId, amount = null) {
-    const paidAmount = amount !== null ? amount : payoutPaidAmounts.value[userId]
-    if (paidAmount < 0) {
+  async function updatePayoutAmount(userId) {
+    const amount = payoutAmounts.value[userId]
+    if (amount < 0) {
       snackbarText.value = 'Выплаченная сумма не может быть отрицательной'
       snackbarColor.value = 'error'
       snackbar.value = true
       return
     }
     const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` }
-    const body = { user_id: userId, payout_amount: paidAmount }
+    const body = { user_id: userId, payout_amount: amount }
     try {
       await $fetch(`${config.public.apiBase}/api/admin/update-payout-amount`, { 
         method: 'POST', 
         headers, 
         body 
       })
-      snackbarText.value = `Выплаченная сумма обновлена: ${paidAmount} руб.`
+      snackbarText.value = `Выплаченная сумма обновлена: ${amount} руб.`
       snackbarColor.value = 'success'
       snackbar.value = true
       await loadNutris()
     } catch (error) {
-      snackbarText.value = 'Ошибка обновления выплаченной суммы: ' + (error.message || 'Неизвестная ошибка')
+      console.error('admin.vue: Ошибка обновления суммы:', error)
+      snackbarText.value = 'Ошибка обновления выплаченной суммы: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
       snackbarColor.value = 'error'
       snackbar.value = true
     }
@@ -214,7 +194,8 @@
       snackbarColor.value = 'success'
       snackbar.value = true
     } catch (error) {
-      snackbarText.value = 'Ошибка расшифровки карты: ' + (error.message || 'Неизвестная ошибка')
+      console.error('admin.vue: Ошибка расшифровки карты:', error)
+      snackbarText.value = 'Ошибка расшифровки карты: ' + (error.response?.data?.error || error.message || 'Неизвестная ошибка')
       snackbarColor.value = 'error'
       snackbar.value = true
     }
